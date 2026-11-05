@@ -45,6 +45,7 @@ export function prepareBulkSubscriptionOperation(input: SubscriptionBulkActionRe
   }
   if (input.action === 'extend') request.days = input.days
   if (input.action === 'reset_quota') {
+    request.five_hour = !!input.five_hour
     request.daily = !!input.daily
     request.weekly = !!input.weekly
     request.monthly = !!input.monthly

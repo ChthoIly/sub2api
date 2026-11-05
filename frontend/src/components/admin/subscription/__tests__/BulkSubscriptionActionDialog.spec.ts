@@ -87,6 +87,8 @@ describe('BulkSubscriptionActionDialog', () => {
 
   it('defaults to all quota windows and validates at least one selected window', async () => {
     const wrapper = mountDialog('reset_quota')
+    expect(wrapper.text()).toContain('admin.subscriptions.fiveHour')
+    expect(wrapper.text()).toContain('admin.subscriptions.daily')
     for (const checkbox of wrapper.findAll('input[type="checkbox"]')) {
       expect((checkbox.element as HTMLInputElement).checked).toBe(true)
       await checkbox.setValue(false)
@@ -99,7 +101,7 @@ describe('BulkSubscriptionActionDialog', () => {
     await wrapper.get('form').trigger('submit')
     await flushPromises()
     expect(bulkAction).toHaveBeenCalledWith({
-      subscription_ids: [1, 2], action: 'reset_quota', daily: false, weekly: true, monthly: false
+      subscription_ids: [1, 2], action: 'reset_quota', five_hour: false, daily: false, weekly: true, monthly: false
     }, expect.any(String))
   })
 

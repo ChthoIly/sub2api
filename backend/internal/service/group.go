@@ -36,6 +36,7 @@ type Group struct {
 	DuplicateOperationID string
 
 	SubscriptionType    string
+	FiveHourLimitUSD    *float64
 	DailyLimitUSD       *float64
 	WeeklyLimitUSD      *float64
 	MonthlyLimitUSD     *float64
@@ -155,6 +156,10 @@ func (g *Group) IsActive() bool {
 
 func (g *Group) IsSubscriptionType() bool {
 	return g.SubscriptionType == SubscriptionTypeSubscription
+}
+
+func (g *Group) HasFiveHourLimit() bool {
+	return g.FiveHourLimitUSD != nil && *g.FiveHourLimitUSD > 0
 }
 
 func (g *Group) HasDailyLimit() bool {
