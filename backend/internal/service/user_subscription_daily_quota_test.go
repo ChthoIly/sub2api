@@ -186,14 +186,16 @@ func TestCheckAndResetWindows_MultiDaySubscriptionStillResetsDailyUsage(t *testi
 
 func TestValidateAndCheckLimits_DailyCardDoesNotAllowSecondQuotaAfterMidnight(t *testing.T) {
 	start := time.Now().Add(-23 * time.Hour)
+	fiveHourWindowStart := time.Now()
 	dailyWindowStart := time.Now().Add(-25 * time.Hour)
 	dailyLimit := 10.0
 	sub := &UserSubscription{
-		Status:           SubscriptionStatusActive,
-		StartsAt:         start,
-		ExpiresAt:        start.Add(24 * time.Hour),
-		DailyWindowStart: &dailyWindowStart,
-		DailyUsageUSD:    dailyLimit + 0.01,
+		Status:              SubscriptionStatusActive,
+		StartsAt:            start,
+		ExpiresAt:           start.Add(24 * time.Hour),
+		FiveHourWindowStart: &fiveHourWindowStart,
+		DailyWindowStart:    &dailyWindowStart,
+		DailyUsageUSD:       dailyLimit + 0.01,
 	}
 	group := &Group{
 		SubscriptionType: SubscriptionTypeSubscription,

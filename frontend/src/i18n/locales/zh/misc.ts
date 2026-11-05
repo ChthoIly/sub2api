@@ -7,6 +7,7 @@ export default {
     activeCount: '{count} 个有效订阅',
     daily: '每日',
     weekly: '每周',
+    fiveHour: '5 小时',
     monthly: '每月',
     daysRemaining: '剩余 {days} 天',
     expired: '已过期',
@@ -126,6 +127,7 @@ export default {
     noExpiration: '无到期时间',
     unlimited: '无限制',
     unlimitedDesc: '该订阅无用量限制',
+    fiveHour: '5 小时',
     daily: '每日',
     weekly: '每周',
     monthly: '每月',
@@ -134,6 +136,7 @@ export default {
     resetIn: '{time} 后重置',
     quotaEndsIn: '额度将在 {time} 后结束',
     windowNotActive: '等待首次使用',
+    firstUseStartsTimer: '首次使用后开始计时',
     usageOf: '已用 {used} / {limit}'
   },
 
@@ -494,6 +497,7 @@ export default {
     planFeatures: '功能特性',
     planCard: {
       rate: '倍率',
+      fiveHourLimit: '5 小时限额',
       peakRate: '高峰倍率',
       dailyLimit: '日限额',
       weeklyLimit: '周限额',
@@ -638,6 +642,7 @@ export default {
       groupInfo: '分组信息',
       platform: '平台',
       rateMultiplierLabel: '倍率',
+      fiveHourLimit: '5 小时限额',
       dailyLimit: '日限额',
       weeklyLimit: '周限额',
       monthlyLimit: '月限额',

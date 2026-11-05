@@ -20,4 +20,17 @@ describe('subscription expiry calendar labels', () => {
     await w.get('button').trigger('click')
     expect(w.text()).toContain('subscriptionProgress.' + label)
   })
+
+  it('renders the five-hour subscription quota window', async () => {
+    store.activeSubscriptions = [{
+      id: 2,
+      group_id: 1,
+      expires_at: new Date(2026, 8, 23, 18).toISOString(),
+      five_hour_usage_usd: 1.5,
+      group: { name: 'Plan', five_hour_limit_usd: 10 }
+    }]
+    const w = mount(SubscriptionProgressMini, { global: { stubs: { Icon: true, RouterLink: true } } })
+    await w.get('button').trigger('click')
+    expect(w.text()).toContain('subscriptionProgress.fiveHour')
+  })
 })

@@ -60,7 +60,7 @@
                 class="h-4 w-4 rounded border-gray-300 text-primary-600 focus:ring-primary-500"
                 :disabled="parametersLocked"
               />
-              {{ t(`admin.subscriptions.${window}`) }}
+              {{ t(`admin.subscriptions.${quotaWindowLabelKeys[window]}`) }}
             </label>
           </div>
           <p class="text-xs text-gray-500 dark:text-gray-400">
@@ -135,9 +135,15 @@ const emit = defineEmits<{
 }>()
 
 const { t } = useI18n()
-const quotaWindows = ['daily', 'weekly', 'monthly'] as const
+const quotaWindows = ['five_hour', 'daily', 'weekly', 'monthly'] as const
+const quotaWindowLabelKeys = {
+  five_hour: 'fiveHour',
+  daily: 'daily',
+  weekly: 'weekly',
+  monthly: 'monthly',
+} as const
 const days = ref<number | string>(30)
-const windows = reactive({ daily: true, weekly: true, monthly: true })
+const windows = reactive({ five_hour: true, daily: true, weekly: true, monthly: true })
 const submitting = ref(false)
 const requestError = ref('')
 const result = shallowRef<SubscriptionBulkActionResult | null>(null)

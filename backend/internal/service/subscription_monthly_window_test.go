@@ -16,6 +16,7 @@ type activateWindowUserSubRepo struct {
 	userSubRepoNoop
 	dailyStart    time.Time
 	periodicStart time.Time
+	fiveHourStart *time.Time
 }
 
 type monthlyResetUserSubRepo struct {
@@ -33,6 +34,11 @@ func (r *monthlyResetUserSubRepo) ResetMonthlyUsage(_ context.Context, _ int64, 
 func (r *activateWindowUserSubRepo) ActivateWindows(_ context.Context, _ int64, dailyStart, periodicStart time.Time) error {
 	r.dailyStart = dailyStart
 	r.periodicStart = periodicStart
+	return nil
+}
+
+func (r *activateWindowUserSubRepo) ResetFiveHourUsage(_ context.Context, _ int64, _ *time.Time, newWindowStart *time.Time) error {
+	r.fiveHourStart = newWindowStart
 	return nil
 }
 
@@ -156,12 +162,14 @@ func TestValidateAndCheckLimitsKeepsLegacyMonthlyUsageBeforeExpiry(t *testing.T)
 	startsAt := windowStart.Add(23*time.Hour + 30*time.Minute)
 	now := windowStart.Add(30 * 24 * time.Hour)
 	limit := 10.0
+	fiveHourWindowStart := now
 	sub := &UserSubscription{
-		Status:             SubscriptionStatusActive,
-		StartsAt:           startsAt,
-		ExpiresAt:          startsAt.Add(30 * 24 * time.Hour),
-		MonthlyWindowStart: &windowStart,
-		MonthlyUsageUSD:    12,
+		Status:              SubscriptionStatusActive,
+		StartsAt:            startsAt,
+		ExpiresAt:           startsAt.Add(30 * 24 * time.Hour),
+		FiveHourWindowStart: &fiveHourWindowStart,
+		MonthlyWindowStart:  &windowStart,
+		MonthlyUsageUSD:     12,
 	}
 	svc := NewSubscriptionService(groupRepoNoop{}, userSubRepoNoop{}, nil, nil, nil)
 	svc.now = func() time.Time { return now }
@@ -178,12 +186,14 @@ func TestValidateAndCheckLimitsResetsMonthlyUsageWithPartialFinalPeriod(t *testi
 	windowStart := startsAt.Add(-23*time.Hour - 30*time.Minute)
 	now := startsAt.Add(30 * 24 * time.Hour)
 	limit := 10.0
+	fiveHourWindowStart := now
 	sub := &UserSubscription{
-		Status:             SubscriptionStatusActive,
-		StartsAt:           startsAt,
-		ExpiresAt:          startsAt.Add(45 * 24 * time.Hour),
-		MonthlyWindowStart: &windowStart,
-		MonthlyUsageUSD:    12,
+		Status:              SubscriptionStatusActive,
+		StartsAt:            startsAt,
+		ExpiresAt:           startsAt.Add(45 * 24 * time.Hour),
+		FiveHourWindowStart: &fiveHourWindowStart,
+		MonthlyWindowStart:  &windowStart,
+		MonthlyUsageUSD:     12,
 	}
 	svc := NewSubscriptionService(groupRepoNoop{}, userSubRepoNoop{}, nil, nil, nil)
 	svc.now = func() time.Time { return now }

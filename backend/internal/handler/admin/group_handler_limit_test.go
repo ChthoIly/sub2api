@@ -11,6 +11,7 @@ func TestUpdateGroupRequestLimitFieldsTriState(t *testing.T) {
 	t.Run("omitted means unchanged", func(t *testing.T) {
 		var req UpdateGroupRequest
 		require.NoError(t, json.Unmarshal([]byte(`{}`), &req))
+		require.Nil(t, req.FiveHourLimitUSD.ToServiceInput())
 		require.Nil(t, req.DailyLimitUSD.ToServiceInput())
 		require.Nil(t, req.WeeklyLimitUSD.ToServiceInput())
 		require.Nil(t, req.MonthlyLimitUSD.ToServiceInput())
@@ -18,7 +19,10 @@ func TestUpdateGroupRequestLimitFieldsTriState(t *testing.T) {
 
 	t.Run("null means unlimited", func(t *testing.T) {
 		var req UpdateGroupRequest
-		require.NoError(t, json.Unmarshal([]byte(`{"daily_limit_usd":null}`), &req))
+		require.NoError(t, json.Unmarshal([]byte(`{"five_hour_limit_usd":null,"daily_limit_usd":null}`), &req))
+		fiveHourLimit := req.FiveHourLimitUSD.ToServiceInput()
+		require.NotNil(t, fiveHourLimit)
+		require.Negative(t, *fiveHourLimit)
 		limit := req.DailyLimitUSD.ToServiceInput()
 		require.NotNil(t, limit)
 		require.Negative(t, *limit)
@@ -26,7 +30,8 @@ func TestUpdateGroupRequestLimitFieldsTriState(t *testing.T) {
 
 	t.Run("number is preserved", func(t *testing.T) {
 		var req UpdateGroupRequest
-		require.NoError(t, json.Unmarshal([]byte(`{"weekly_limit_usd":0,"monthly_limit_usd":42.5}`), &req))
+		require.NoError(t, json.Unmarshal([]byte(`{"five_hour_limit_usd":1.5,"weekly_limit_usd":0,"monthly_limit_usd":42.5}`), &req))
+		require.Equal(t, 1.5, *req.FiveHourLimitUSD.ToServiceInput())
 		require.Equal(t, 0.0, *req.WeeklyLimitUSD.ToServiceInput())
 		require.Equal(t, 42.5, *req.MonthlyLimitUSD.ToServiceInput())
 	})

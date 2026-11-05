@@ -18,7 +18,7 @@ import (
 
 // 错误定义
 // 注：ErrInsufficientBalance在redeem_service.go中定义
-// 注：ErrDailyLimitExceeded/ErrWeeklyLimitExceeded/ErrMonthlyLimitExceeded在subscription_service.go中定义
+// 注：ErrFiveHourLimitExceeded/ErrDailyLimitExceeded/ErrWeeklyLimitExceeded/ErrMonthlyLimitExceeded 在 subscription_service.go 中定义
 // errBillingCacheUnavailable 内部哨兵：用于 quota 校验路径在 cache==nil 时
 // 与"Redis 故障"走同一条 fail-open + DB 一次性检查的分支。
 var errBillingCacheUnavailable = fmt.Errorf("billing cache unavailable")
@@ -41,12 +41,13 @@ var (
 
 // subscriptionCacheData 订阅缓存数据结构（内部使用）
 type subscriptionCacheData struct {
-	Status       string
-	ExpiresAt    time.Time
-	DailyUsage   float64
-	WeeklyUsage  float64
-	MonthlyUsage float64
-	Version      int64
+	Status        string
+	ExpiresAt     time.Time
+	FiveHourUsage float64
+	DailyUsage    float64
+	WeeklyUsage   float64
+	MonthlyUsage  float64
+	Version       int64
 }
 
 // 缓存写入任务类型
@@ -443,23 +444,25 @@ func (s *BillingCacheService) GetSubscriptionStatus(ctx context.Context, userID,
 
 func (s *BillingCacheService) convertFromPortsData(data *SubscriptionCacheData) *subscriptionCacheData {
 	return &subscriptionCacheData{
-		Status:       data.Status,
-		ExpiresAt:    data.ExpiresAt,
-		DailyUsage:   data.DailyUsage,
-		WeeklyUsage:  data.WeeklyUsage,
-		MonthlyUsage: data.MonthlyUsage,
-		Version:      data.Version,
+		Status:        data.Status,
+		ExpiresAt:     data.ExpiresAt,
+		FiveHourUsage: data.FiveHourUsage,
+		DailyUsage:    data.DailyUsage,
+		WeeklyUsage:   data.WeeklyUsage,
+		MonthlyUsage:  data.MonthlyUsage,
+		Version:       data.Version,
 	}
 }
 
 func (s *BillingCacheService) convertToPortsData(data *subscriptionCacheData) *SubscriptionCacheData {
 	return &SubscriptionCacheData{
-		Status:       data.Status,
-		ExpiresAt:    data.ExpiresAt,
-		DailyUsage:   data.DailyUsage,
-		WeeklyUsage:  data.WeeklyUsage,
-		MonthlyUsage: data.MonthlyUsage,
-		Version:      data.Version,
+		Status:        data.Status,
+		ExpiresAt:     data.ExpiresAt,
+		FiveHourUsage: data.FiveHourUsage,
+		DailyUsage:    data.DailyUsage,
+		WeeklyUsage:   data.WeeklyUsage,
+		MonthlyUsage:  data.MonthlyUsage,
+		Version:       data.Version,
 	}
 }
 
@@ -471,12 +474,13 @@ func (s *BillingCacheService) getSubscriptionFromDB(ctx context.Context, userID,
 	}
 
 	return &subscriptionCacheData{
-		Status:       sub.Status,
-		ExpiresAt:    sub.ExpiresAt,
-		DailyUsage:   sub.DailyUsageUSD,
-		WeeklyUsage:  sub.WeeklyUsageUSD,
-		MonthlyUsage: sub.MonthlyUsageUSD,
-		Version:      sub.UpdatedAt.Unix(),
+		Status:        sub.Status,
+		ExpiresAt:     sub.ExpiresAt,
+		FiveHourUsage: sub.FiveHourUsageUSD,
+		DailyUsage:    sub.DailyUsageUSD,
+		WeeklyUsage:   sub.WeeklyUsageUSD,
+		MonthlyUsage:  sub.MonthlyUsageUSD,
+		Version:       sub.UpdatedAt.Unix(),
 	}, nil
 }
 
@@ -819,7 +823,7 @@ func (s *BillingCacheService) ReserveFixedCharge(ctx context.Context, user *User
 		return nil, err
 	}
 	var subscriptionPending, apiKeyPending float64
-	if subscriptionBill && (group.HasDailyLimit() || group.HasWeeklyLimit() || group.HasMonthlyLimit()) {
+	if subscriptionBill && (group.HasFiveHourLimit() || group.HasDailyLimit() || group.HasWeeklyLimit() || group.HasMonthlyLimit()) {
 		res, subscriptionPending = s.reserveInflightScope(ctx, res, user.ID, inflightSubscriptionScope(subscription.ID), amount)
 	}
 	if apiKey != nil && (apiKey.Quota > 0 || apiKey.HasRateLimits()) {
@@ -838,7 +842,7 @@ func (s *BillingCacheService) ReserveFixedCharge(ctx context.Context, user *User
 	return res, nil
 }
 
-// checkFixedChargeSubscription 按库中订阅用量校验日 / 周 / 月剩余额度覆盖 pending。
+// checkFixedChargeSubscription 按库中订阅用量校验 5h / 日 / 周 / 月剩余额度覆盖 pending。
 func (s *BillingCacheService) checkFixedChargeSubscription(ctx context.Context, userID int64, group *Group, pending float64) error {
 	read := s.GetSubscriptionStatus
 	if s.subRepo != nil {
@@ -847,6 +851,9 @@ func (s *BillingCacheService) checkFixedChargeSubscription(ctx context.Context, 
 	subData, err := read(ctx, userID, group.ID)
 	if err != nil {
 		return ErrBillingServiceUnavailable.WithCause(err)
+	}
+	if group.HasFiveHourLimit() && subData.FiveHourUsage+pending > *group.FiveHourLimitUSD {
+		return ErrFiveHourLimitExceeded
 	}
 	if group.HasDailyLimit() && subData.DailyUsage+pending > *group.DailyLimitUSD {
 		return ErrDailyLimitExceeded
@@ -1067,7 +1074,18 @@ func (s *BillingCacheService) checkSubscriptionEligibility(ctx context.Context, 
 		return ErrSubscriptionInvalid
 	}
 
-	// 检查限额（使用传入的Group限额配置）
+	// 检查限额（使用传入的Group限额配置）。
+	// 5h 窗口滚动频率高：中间件快照可能来自 L1 缓存，而 Redis 用量通常
+	// 已在上一请求计费落地后更新。两者取较大值，避免 L1 缓存把已超限
+	// 的订阅继续放行；窗口重置时 EnsureWindowMaintenance 会失效这两层缓存。
+	fiveHourUsage := subData.FiveHourUsage
+	if subscription != nil && subscription.FiveHourUsageUSD > fiveHourUsage {
+		fiveHourUsage = subscription.FiveHourUsageUSD
+	}
+	if group.HasFiveHourLimit() && fiveHourUsage >= *group.FiveHourLimitUSD {
+		return ErrFiveHourLimitExceeded
+	}
+
 	if group.HasDailyLimit() && subData.DailyUsage >= *group.DailyLimitUSD {
 		return ErrDailyLimitExceeded
 	}

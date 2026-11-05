@@ -7,6 +7,7 @@ export default {
     activeCount: '{count} active subscription(s)',
     daily: 'Daily',
     weekly: 'Weekly',
+    fiveHour: '5-Hour',
     monthly: 'Monthly',
     daysRemaining: '{days} days left',
     expired: 'Expired',
@@ -129,6 +130,7 @@ export default {
     noExpiration: 'No expiration',
     unlimited: 'Unlimited',
     unlimitedDesc: 'No usage limits on this subscription',
+    fiveHour: '5-Hour',
     daily: 'Daily',
     weekly: 'Weekly',
     monthly: 'Monthly',
@@ -137,6 +139,7 @@ export default {
     resetIn: 'Resets in {time}',
     quotaEndsIn: 'Quota ends in {time}',
     windowNotActive: 'Awaiting first use',
+    firstUseStartsTimer: 'Timer starts after first use',
     usageOf: '{used} of {limit}'
   },
 
@@ -470,6 +473,7 @@ export default {
     planFeatures: 'Features',
     planCard: {
       rate: 'Rate',
+      fiveHourLimit: '5-Hour',
       peakRate: 'Peak Rate',
       dailyLimit: 'Daily',
       weeklyLimit: 'Weekly',
@@ -614,6 +618,7 @@ export default {
       groupInfo: 'Group Info',
       platform: 'Platform',
       rateMultiplierLabel: 'Rate',
+      fiveHourLimit: '5-Hour Limit',
       dailyLimit: 'Daily Limit',
       weeklyLimit: 'Weekly Limit',
       monthlyLimit: 'Monthly Limit',

@@ -231,6 +231,10 @@ func (f fakeGoogleSubscriptionRepo) UpdateStatus(ctx context.Context, subscripti
 func (f fakeGoogleSubscriptionRepo) UpdateNotes(ctx context.Context, subscriptionID int64, notes string) error {
 	return errors.New("not implemented")
 }
+func (f fakeGoogleSubscriptionRepo) ResetFiveHourUsage(ctx context.Context, id int64, expectedWindowStart, newWindowStart *time.Time) error {
+	return nil
+}
+
 func (f fakeGoogleSubscriptionRepo) ActivateWindows(ctx context.Context, id int64, dailyStart, periodicStart time.Time) error {
 	if f.activateWindow != nil {
 		return f.activateWindow(ctx, id, dailyStart, periodicStart)
@@ -869,13 +873,14 @@ func TestApiKeyAuthWithSubscriptionGoogle_SubscriptionLimitExceededReturns429(t 
 
 	now := time.Now()
 	sub := &service.UserSubscription{
-		ID:               601,
-		UserID:           user.ID,
-		GroupID:          group.ID,
-		Status:           service.SubscriptionStatusActive,
-		ExpiresAt:        now.Add(24 * time.Hour),
-		DailyWindowStart: &now,
-		DailyUsageUSD:    10,
+		ID:                  601,
+		UserID:              user.ID,
+		GroupID:             group.ID,
+		Status:              service.SubscriptionStatusActive,
+		ExpiresAt:           now.Add(24 * time.Hour),
+		FiveHourWindowStart: &now,
+		DailyWindowStart:    &now,
+		DailyUsageUSD:       10,
 	}
 	subscriptionService := service.NewSubscriptionService(nil, fakeGoogleSubscriptionRepo{
 		getActive: func(ctx context.Context, userID, groupID int64) (*service.UserSubscription, error) {
