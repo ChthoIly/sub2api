@@ -1,0 +1,181 @@
+name: Fork sync and custom image
+
+# This workflow is meant to live on the personal branch (default: custom).
+# It keeps:
+#   - origin/main  = upstream/main (pure mirror)
+#   - origin/custom = personal commits rebased on top of upstream/main
+# and then publishes an image built from the rebased custom branch.
+on:
+  schedule:
+    # GitHub Actions cron is UTC. Every day at 03:17 UTC.
+    - cron: '17 3 * * *'
+  workflow_dispatch:
+    inputs:
+      force_build:
+        description: 'Rebuild and publish the image even when the branch did not change'
+        required: false
+        type: boolean
+        default: false
+  push:
+    branches:
+      - custom
+
+permissions:
+  contents: write
+  packages: write
+
+concurrency:
+  group: fork-sync
+  cancel-in-progress: false
+
+env:
+  UPSTREAM_REPO: Wei-Shaw/sub2api
+  UPSTREAM_BRANCH: main
+  MIRROR_BRANCH: main
+  PERSONAL_BRANCH: custom
+
+jobs:
+  sync:
+    runs-on: ubuntu-latest
+    outputs:
+      build: ${{ steps.rebase.outputs.build }}
+      sha: ${{ steps.rebase.outputs.sha }}
+    steps:
+      - name: Checkout personal branch
+        uses: actions/checkout@v6
+        with:
+          ref: ${{ env.PERSONAL_BRANCH }}
+          fetch-depth: 0
+          token: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Configure Git
+        run: |
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git remote add upstream "https://github.com/${UPSTREAM_REPO}.git" 2>/dev/null || \
+            git remote set-url upstream "https://github.com/${UPSTREAM_REPO}.git"
+
+      - name: Fetch upstream and mirror
+        run: |
+          git fetch --no-tags upstream \
+            "+refs/heads/${UPSTREAM_BRANCH}:refs/remotes/upstream/${UPSTREAM_BRANCH}"
+          git fetch --no-tags origin \
+            "+refs/heads/${MIRROR_BRANCH}:refs/remotes/origin/${MIRROR_BRANCH}"
+
+      - name: Fast-forward the mirror branch
+        id: mirror
+        run: |
+          upstream_sha="$(git rev-parse "refs/remotes/upstream/${UPSTREAM_BRANCH}")"
+          mirror_sha="$(git rev-parse "refs/remotes/origin/${MIRROR_BRANCH}")"
+
+          if [ "$upstream_sha" = "$mirror_sha" ]; then
+            echo "Mirror is already up to date: $mirror_sha"
+          else
+            # A fork should only contain fast-forwardable mirror updates.
+            # If this fails, someone committed directly to main or upstream
+            # rewrote history. Both need a deliberate manual decision.
+            if ! git merge-base --is-ancestor "$mirror_sha" "$upstream_sha"; then
+              echo "::error::origin/${MIRROR_BRANCH} has diverged from upstream/${UPSTREAM_BRANCH}."
+              echo "::error::Do not commit personal changes to ${MIRROR_BRANCH}; move them to ${PERSONAL_BRANCH} and make the mirror match upstream."
+              exit 1
+            fi
+            git push origin "$upstream_sha:refs/heads/${MIRROR_BRANCH}"
+          fi
+
+          echo "sha=$upstream_sha" >> "$GITHUB_OUTPUT"
+
+      - name: Rebase personal branch onto upstream
+        id: rebase
+        env:
+          FORCE_BUILD: ${{ inputs.force_build || false }}
+          EVENT_NAME: ${{ github.event_name }}
+        run: |
+          old_sha="$(git rev-parse HEAD)"
+          upstream_sha="$(git rev-parse "refs/remotes/upstream/${UPSTREAM_BRANCH}")"
+
+          # Never merge upstream into the personal branch: rebasing keeps the
+          # personal commits at the top and makes future syncs predictable.
+          if ! git merge-base --is-ancestor "$upstream_sha" HEAD; then
+            if ! git rebase "$upstream_sha"; then
+              git rebase --abort || true
+              echo "::error::Rebase conflict. Nothing was pushed."
+              echo "::error::Resolve it locally: git fetch upstream && git switch ${PERSONAL_BRANCH} && git rebase upstream/${UPSTREAM_BRANCH}"
+              exit 1
+            fi
+          fi
+
+          new_sha="$(git rev-parse HEAD)"
+          if [ "$new_sha" != "$old_sha" ]; then
+            git push \
+              --force-with-lease="refs/heads/${PERSONAL_BRANCH}:${old_sha}" \
+              origin "HEAD:refs/heads/${PERSONAL_BRANCH}"
+          fi
+
+          build=false
+          if [ "$new_sha" != "$old_sha" ] || [ "$EVENT_NAME" = "push" ] || [ "$FORCE_BUILD" = "true" ]; then
+            build=true
+          fi
+          echo "sha=$new_sha" >> "$GITHUB_OUTPUT"
+          echo "build=$build" >> "$GITHUB_OUTPUT"
+
+  build:
+    needs: sync
+    if: needs.sync.outputs.build == 'true'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write
+    steps:
+      - name: Checkout rebased personal branch
+        uses: actions/checkout@v6
+        with:
+          ref: ${{ needs.sync.outputs.sha }}
+          fetch-depth: 0
+
+      - name: Resolve image name
+        id: image
+        run: echo "name=ghcr.io/${GITHUB_REPOSITORY,,}" >> "$GITHUB_OUTPUT"
+
+      - name: Login to GHCR
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.repository_owner }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Extract image metadata
+        id: meta
+        uses: docker/metadata-action@v5
+        with:
+          images: ${{ steps.image.outputs.name }}
+          tags: |
+            type=raw,value=custom
+            type=sha,prefix=custom-,format=short
+          labels: |
+            org.opencontainers.image.source=https://github.com/${{ github.repository }}
+            org.opencontainers.image.revision=${{ needs.sync.outputs.sha }}
+
+      - name: Set up QEMU
+        # GitHub's Ubuntu runners are amd64. QEMU lets us build the arm64
+        # image used by Apple Silicon Macs.
+        uses: docker/setup-qemu-action@v3
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Build and push
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: ./Dockerfile
+          push: true
+          # The current local machine is Apple Silicon (arm64).
+          # Use linux/amd64,linux/arm64 if you also deploy to an x86 host.
+          platforms: linux/arm64
+          tags: ${{ steps.meta.outputs.tags }}
+          labels: ${{ steps.meta.outputs.labels }}
+          build-args: |
+            VERSION=custom-${{ github.run_number }}
+            COMMIT=${{ needs.sync.outputs.sha }}
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
