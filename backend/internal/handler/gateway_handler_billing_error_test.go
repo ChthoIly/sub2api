@@ -126,3 +126,18 @@ func TestBillingErrorDetails_T10_QuotaExhaustedReturns429WithRetryAfter(t *testi
 		})
 	}
 }
+
+func TestBillingErrorDetails_SubscriptionWindowsMapTo429(t *testing.T) {
+	for _, err := range []error{
+		service.ErrFiveHourLimitExceeded,
+		service.ErrDailyLimitExceeded,
+		service.ErrWeeklyLimitExceeded,
+		service.ErrMonthlyLimitExceeded,
+	} {
+		status, code, msg, retryAfter := billingErrorDetails(err)
+		require.Equal(t, http.StatusTooManyRequests, status, "status for %v", err)
+		require.Equal(t, "USAGE_LIMIT_EXCEEDED", code)
+		require.NotEmpty(t, msg)
+		require.Zero(t, retryAfter)
+	}
+}

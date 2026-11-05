@@ -299,13 +299,14 @@ func TestSimpleModeBypassesQuotaCheck(t *testing.T) {
 
 		now := time.Now()
 		sub := &service.UserSubscription{
-			ID:               55,
-			UserID:           user.ID,
-			GroupID:          group.ID,
-			Status:           service.SubscriptionStatusActive,
-			ExpiresAt:        now.Add(24 * time.Hour),
-			DailyWindowStart: &now,
-			DailyUsageUSD:    10,
+			ID:                  55,
+			UserID:              user.ID,
+			GroupID:             group.ID,
+			Status:              service.SubscriptionStatusActive,
+			ExpiresAt:           now.Add(24 * time.Hour),
+			FiveHourWindowStart: &now,
+			DailyWindowStart:    &now,
+			DailyUsageUSD:       10,
 		}
 		subscriptionRepo := &stubUserSubscriptionRepo{
 			getActive: func(ctx context.Context, userID, groupID int64) (*service.UserSubscription, error) {
@@ -1815,6 +1816,10 @@ func (r *stubUserSubscriptionRepo) UpdateStatus(ctx context.Context, subscriptio
 
 func (r *stubUserSubscriptionRepo) UpdateNotes(ctx context.Context, subscriptionID int64, notes string) error {
 	return errors.New("not implemented")
+}
+
+func (r *stubUserSubscriptionRepo) ResetFiveHourUsage(ctx context.Context, id int64, expectedWindowStart, newWindowStart *time.Time) error {
+	return nil
 }
 
 func (r *stubUserSubscriptionRepo) ActivateWindows(ctx context.Context, id int64, dailyStart, periodicStart time.Time) error {

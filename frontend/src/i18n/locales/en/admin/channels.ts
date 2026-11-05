@@ -725,6 +725,7 @@ export default {
       allStatus: 'All Status',
       allGroups: 'All Groups',
       allPlatforms: 'All Platforms',
+      fiveHour: '5-Hour',
       daily: 'Daily',
       weekly: 'Weekly',
       monthly: 'Monthly',
@@ -732,6 +733,7 @@ export default {
       unlimited: 'Unlimited',
       resetNow: 'Resetting soon',
       windowNotActive: 'Window not active',
+      firstUseStartsTimer: 'Timer starts after first use',
       resetInMinutes: 'Resets in {minutes}m',
       resetInHoursMinutes: 'Resets in {hours}h {minutes}m',
       resetInDaysHours: 'Resets in {days}d {hours}h',
@@ -779,7 +781,7 @@ export default {
       restore: 'Restore',
       resetQuota: 'Reset Quota',
       resetQuotaTitle: 'Reset Usage Quota',
-      resetQuotaConfirm: "Reset the daily, weekly, and monthly usage quota for '{user}'? Usage will be zeroed and windows restarted from today.",
+      resetQuotaConfirm: "Reset the five-hour, daily, weekly, and monthly usage quota for '{user}'? Usage will be zeroed and the windows will restart.",
       quotaResetSuccess: 'Quota reset successfully',
       failedToResetQuota: 'Failed to reset quota',
       noSubscriptionsYet: 'No subscriptions yet',
@@ -804,12 +806,12 @@ export default {
         "Restore the subscription for '{user}'? If the original subscription has expired, it will be restored as expired.",
       guide: {
         title: 'Subscription Management Guide',
-        subtitle: 'Subscription mode lets you assign time-based usage quotas to users, with daily/weekly/monthly limits. Follow these steps to get started.',
+        subtitle: 'Subscription mode lets you assign time-based usage quotas to users, with five-hour/daily/weekly/monthly limits. Follow these steps to get started.',
         showGuide: 'Usage Guide',
         step1: {
           title: 'Create a Subscription Group',
           line1: 'Go to "Group Management" page, click "Create Group"',
-          line2: 'Set billing type to "Subscription", configure daily/weekly/monthly quota limits',
+          line2: 'Set billing type to "Subscription", configure five-hour/daily/weekly/monthly quota limits',
           line3: 'Save the group and ensure its status is "Active"',
           link: 'Go to Group Management'
         },
@@ -826,7 +828,7 @@ export default {
           adjust: 'Adjust',
           adjustDesc: 'Extend or shorten the subscription validity period',
           resetQuota: 'Reset Quota',
-          resetQuotaDesc: 'Reset daily/weekly/monthly usage to zero',
+          resetQuotaDesc: 'Reset five-hour/daily/weekly/monthly usage to zero',
           revoke: 'Revoke',
           revokeDesc: 'Immediately terminate the subscription (restorable from the revoked list)'
         },

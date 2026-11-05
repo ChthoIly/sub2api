@@ -87,6 +87,12 @@ func (Group) Fields() []ent.Field {
 		field.String("subscription_type").
 			MaxLen(20).
 			Default(domain.SubscriptionTypeStandard),
+		// 5 小时滚动窗口的 USD 上限（订阅模式使用）。
+		// nil = 不限；0 = 不限制（与日/周/月保持一致）；>0 = 限额。
+		field.Float("five_hour_limit_usd").
+			Optional().
+			Nillable().
+			SchemaType(map[string]string{dialect.Postgres: "decimal(20,8)"}),
 		field.Float("daily_limit_usd").
 			Optional().
 			Nillable().

@@ -16,6 +16,7 @@ type BulkSubscriptionActionInput struct {
 	SubscriptionIDs []int64 `json:"subscription_ids"`
 	Action          string  `json:"action"`
 	Days            int     `json:"days,omitempty"`
+	FiveHour        bool    `json:"five_hour,omitempty"`
 	Daily           bool    `json:"daily,omitempty"`
 	Weekly          bool    `json:"weekly,omitempty"`
 	Monthly         bool    `json:"monthly,omitempty"`
@@ -40,7 +41,7 @@ func (input *BulkSubscriptionActionInput) Validate() error {
 			return infraerrors.BadRequest("INVALID_ADJUSTMENT_DAYS", "days must be nonzero and between -36500 and 36500")
 		}
 	case "reset_quota":
-		if !input.Daily && !input.Weekly && !input.Monthly {
+		if !input.FiveHour && !input.Daily && !input.Weekly && !input.Monthly {
 			return ErrInvalidInput
 		}
 	case "revoke", "restore":
@@ -90,7 +91,7 @@ func (s *SubscriptionService) BulkSubscriptionAction(ctx context.Context, input 
 				case "extend":
 					changed, mutationErr = s.ExtendSubscription(txCtx, id, input.Days)
 				case "reset_quota":
-					changed, mutationErr = s.AdminResetQuota(txCtx, id, input.Daily, input.Weekly, input.Monthly)
+					changed, mutationErr = s.AdminResetQuota(txCtx, id, input.FiveHour, input.Daily, input.Weekly, input.Monthly)
 				case "revoke":
 					changed, mutationErr = s.userSubRepo.GetByID(txCtx, id)
 					if mutationErr == nil {
