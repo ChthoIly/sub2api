@@ -186,6 +186,7 @@ export default {
     proxies: 'Proxies',
     redeemCodes: 'Redeem Codes',
     ops: 'Ops',
+    activityMonitor: 'Activity Monitor',
     promoCodes: 'Promo Codes',
     settings: 'Settings',
     myAccount: 'My Account',
