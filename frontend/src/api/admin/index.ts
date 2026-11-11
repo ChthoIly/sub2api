@@ -4,6 +4,7 @@
  */
 
 import dashboardAPI from './dashboard'
+import activityMonitorAPI from './activityMonitor'
 import usersAPI from './users'
 import groupsAPI from './groups'
 import accountsAPI from './accounts'
@@ -42,6 +43,7 @@ import pluginsAPI from './plugins'
  */
 export const adminAPI = {
   dashboard: dashboardAPI,
+  activityMonitor: activityMonitorAPI,
   users: usersAPI,
   groups: groupsAPI,
   accounts: accountsAPI,
@@ -78,6 +80,7 @@ export const adminAPI = {
 
 export {
   dashboardAPI,
+  activityMonitorAPI,
   usersAPI,
   groupsAPI,
   accountsAPI,
@@ -116,6 +119,14 @@ export default adminAPI
 
 // Re-export types used by components
 export type { AuditLog, AuditLogQuery, AuditLogListResponse } from './audit'
+export type {
+  ActivityMonitorScope,
+  ActivityTimelineParams,
+  ActivityTimelineSegment,
+  ActivityTimelineDay,
+  ActivityTimelineEntity,
+  ActivityTimelineResponse
+} from './activityMonitor'
 export type { BalanceHistoryItem } from './users'
 export type { ErrorPassthroughRule, CreateRuleRequest, UpdateRuleRequest } from './errorPassthrough'
 export type { BackupAgentHealth, DataManagementConfig } from './dataManagement'

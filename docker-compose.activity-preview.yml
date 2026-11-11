@@ -1,0 +1,131 @@
+# Isolated preview stack for the Activity Monitor feature.
+#
+# This file intentionally does NOT reuse the production project, networks,
+# volumes, container names, or ports. It must be run with a dedicated project:
+#
+#   PREVIEW_DB_DUMP=/absolute/path/to/backup.sql.gz \
+#     docker compose -p sub2api-activity-preview \
+#     -f docker-compose.activity-preview.yml up -d --build
+#
+# The API is exposed only on 127.0.0.1.
+name: sub2api-activity-preview
+
+services:
+  postgres:
+    image: postgres:18-alpine
+    container_name: sub2api-activity-preview-postgres
+    restart: "no"
+    environment:
+      POSTGRES_USER: sub2api
+      POSTGRES_PASSWORD: activity-preview-db-only
+      POSTGRES_DB: sub2api
+      PGDATA: /var/lib/postgresql/data
+      TZ: Asia/Shanghai
+    volumes:
+      - preview_pgdata:/var/lib/postgresql/data
+      - ${PREVIEW_DB_DUMP:?Set PREVIEW_DB_DUMP to a plain SQL or .sql.gz backup}:/docker-entrypoint-initdb.d/01-preview-restore.sql.gz:ro
+    networks:
+      - preview_backend
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U sub2api -d sub2api"]
+      interval: 5s
+      timeout: 5s
+      retries: 30
+      start_period: 20s
+
+  redis:
+    image: redis:8-alpine
+    container_name: sub2api-activity-preview-redis
+    restart: "no"
+    command:
+      - redis-server
+      - --save
+      - ""
+      - --appendonly
+      - "no"
+      - --requirepass
+      - activity-preview-redis-only
+    environment:
+      TZ: Asia/Shanghai
+    networks:
+      - preview_backend
+    healthcheck:
+      test: ["CMD-SHELL", "redis-cli -a activity-preview-redis-only ping | grep -q PONG"]
+      interval: 5s
+      timeout: 5s
+      retries: 20
+
+  sub2api:
+    build:
+      context: .
+      dockerfile: Dockerfile
+      args:
+        NPM_CONFIG_REGISTRY: ${NPM_CONFIG_REGISTRY:-}
+        GOPROXY: ${GOPROXY:-https://goproxy.cn,direct}
+        GOSUMDB: ${GOSUMDB:-sum.golang.google.cn}
+    image: sub2api:activity-preview
+    container_name: sub2api-activity-preview
+    restart: "no"
+    ports:
+      - "127.0.0.1:${PREVIEW_PORT:-18080}:8080"
+    environment:
+      AUTO_SETUP: "true"
+      SERVER_HOST: 0.0.0.0
+      SERVER_PORT: 8080
+      SERVER_MODE: release
+      RUN_MODE: standard
+      TZ: Asia/Shanghai
+      SETUP_MIGRATION_TIMEOUT_SECONDS: 300
+
+      DATABASE_HOST: postgres
+      DATABASE_PORT: 5432
+      DATABASE_USER: sub2api
+      DATABASE_PASSWORD: activity-preview-db-only
+      DATABASE_DBNAME: sub2api
+      DATABASE_SSLMODE: disable
+      DATABASE_MAX_OPEN_CONNS: 20
+      DATABASE_MAX_IDLE_CONNS: 5
+      DATABASE_CONN_MAX_LIFETIME_MINUTES: 30
+      DATABASE_CONN_MAX_IDLE_TIME_MINUTES: 5
+
+      REDIS_HOST: redis
+      REDIS_PORT: 6379
+      REDIS_USERNAME: ""
+      REDIS_PASSWORD: activity-preview-redis-only
+      REDIS_DB: 0
+      REDIS_ENABLE_TLS: "false"
+      REDIS_POOL_SIZE: 128
+      REDIS_MIN_IDLE_CONNS: 4
+
+      # Keep preview sessions separate from production sessions.
+      JWT_SECRET: activity-preview-only-jwt-secret-do-not-use-in-production
+      JWT_EXPIRE_HOUR: 24
+      ADMIN_EMAIL: ${ADMIN_EMAIL:-}
+      ADMIN_PASSWORD: ${ADMIN_PASSWORD:-}
+
+      # Avoid preview-side background writes/upstream monitoring as much as
+      # possible. The activity timeline endpoint is independent of these.
+      OPS_ENABLED: "false"
+      DASHBOARD_AGGREGATION_ENABLED: "false"
+      TOKEN_REFRESH_ENABLED: "false"
+      GATEWAY_CN_PROVIDERS_BALANCE_CHECK_ENABLED: "false"
+      ENABLE_SERVER_TIMING: "false"
+      LOG_SAMPLING_ENABLED: "false"
+      UPDATE_GITHUB_TOKEN: ""
+    volumes:
+      - preview_appdata:/app/data
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    networks:
+      - preview_backend
+
+volumes:
+  preview_pgdata:
+  preview_appdata:
+
+networks:
+  preview_backend:
+    name: sub2api-activity-preview_backend
