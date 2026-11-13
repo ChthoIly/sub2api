@@ -40,13 +40,102 @@
         <div v-if="usageInfo.error" class="text-xs text-amber-600 dark:text-amber-400 truncate max-w-[200px]" :title="usageInfo.error">
           {{ usageInfo.error }}
         </div>
+
+        <!-- 5h / 7d local usage + 100% quota estimates: two compact 4-column rows. -->
+        <div
+          v-if="anthropicWindowSummaryRows.length > 0"
+          class="mb-1.5 space-y-1"
+          data-testid="anthropic-window-summary"
+        >
+          <div
+            v-for="row in anthropicWindowSummaryRows"
+            :key="row.key"
+            class="grid grid-cols-4 items-center gap-1.5 rounded-lg border border-gray-200/70 bg-gray-50/80 px-2 py-1.5 dark:border-gray-700/60 dark:bg-gray-900/30"
+            data-testid="anthropic-window-summary-row"
+          >
+            <div
+              class="flex min-w-0 items-center gap-1.5"
+              data-testid="anthropic-window-summary-cell"
+              :title="row.requestsTitle"
+            >
+              <span
+                :class="[
+                  'inline-flex shrink-0 items-center rounded px-1 py-0.5 text-[9px] font-semibold',
+                  row.badgeClass
+                ]"
+              >{{ row.label }}</span>
+              <span
+                v-if="row.hasStats"
+                class="truncate text-[10px] font-medium text-gray-700 dark:text-gray-200"
+              >{{ row.requests }} req</span>
+              <span v-else class="text-[10px] text-gray-400">-</span>
+            </div>
+
+            <div
+              class="min-w-0"
+              data-testid="anthropic-window-summary-cell"
+              :title="row.tokensTitle"
+            >
+              <span class="block text-[8px] text-gray-400 dark:text-gray-500">
+                {{ t('admin.accounts.usageWindow.summaryTokens') }}
+              </span>
+              <span
+                v-if="row.hasStats"
+                class="block truncate text-[10px] font-medium text-gray-700 dark:text-gray-200"
+              >{{ row.tokens }}</span>
+              <span v-else class="block text-[10px] text-gray-400">-</span>
+            </div>
+
+            <div
+              class="min-w-0"
+              data-testid="anthropic-window-summary-cell"
+              :title="row.usedCostTitle"
+            >
+              <span class="block text-[8px] text-gray-400 dark:text-gray-500">
+                {{ t('admin.accounts.usageWindow.summaryUsedCost') }}
+              </span>
+              <template v-if="row.hasStats">
+                <span class="block truncate text-[10px] font-medium text-gray-700 dark:text-gray-200">
+                  {{ row.usedCost }}
+                </span>
+                <span
+                  v-if="row.usedCostSecondary"
+                  class="block truncate text-[9px] text-gray-500 dark:text-gray-400"
+                >{{ row.usedCostSecondary }}</span>
+              </template>
+              <span v-else class="block text-[10px] text-gray-400">-</span>
+            </div>
+
+            <div
+              class="min-w-0"
+              data-testid="anthropic-window-summary-cell"
+              :title="row.estimateTitle"
+            >
+              <span class="block text-[8px] text-gray-400 dark:text-gray-500">
+                {{ t('admin.accounts.usageWindow.summaryFullEstimate') }}
+              </span>
+              <template v-if="row.hasStats">
+                <span
+                  v-if="row.estimate"
+                  class="block truncate text-[10px] font-medium text-gray-700 dark:text-gray-200"
+                >{{ row.estimate }}</span>
+                <span v-else class="block text-[10px] text-gray-400">-</span>
+                <span
+                  v-if="row.estimateSecondary"
+                  class="block truncate text-[9px] text-gray-500 dark:text-gray-400"
+                >{{ row.estimateSecondary }}</span>
+              </template>
+              <span v-else class="block text-[10px] text-gray-400">-</span>
+            </div>
+          </div>
+        </div>
+
         <!-- 5h Window -->
         <UsageProgressBar
           v-if="usageInfo.five_hour"
           label="5h"
           :utilization="usageInfo.five_hour.utilization"
           :resets-at="usageInfo.five_hour.resets_at"
-          :window-stats="usageInfo.five_hour.window_stats"
           color="indigo"
         />
 
@@ -77,6 +166,18 @@
           color="amber"
         />
 
+        <div
+          v-if="anthropicQuotaAdvice"
+          class="flex items-start gap-1.5 rounded-md border px-2 py-1.5 text-[10px] leading-snug"
+          :class="anthropicQuotaAdvice.boxClass"
+          data-testid="anthropic-quota-advice"
+        >
+          <span
+            class="mt-[3px] h-1.5 w-1.5 shrink-0 rounded-full"
+            :class="anthropicQuotaAdvice.dotClass"
+          ></span>
+          <span>{{ anthropicQuotaAdvice.text }}</span>
+        </div>
       </div>
 
       <!-- No data yet -->
@@ -750,7 +851,7 @@
 import { ref, computed, onMounted, onBeforeUnmount, onUnmounted, watch } from 'vue'
 import { useI18n } from 'vue-i18n'
 import { adminAPI } from '@/api/admin'
-import type { Account, AccountUsageInfo, GeminiCredentials, WindowStats } from '@/types'
+import type { Account, AccountUsageInfo, GeminiCredentials, UsageProgress, WindowStats } from '@/types'
 import { buildOpenAIUsageRefreshKey } from '@/utils/accountUsageRefresh'
 import { enqueueUsageRequest } from '@/utils/usageLoadQueue'
 import { formatCompactNumber } from '@/utils/format'
@@ -915,6 +1016,189 @@ const openAISevenDayEstimatedTotalCost = computed(() => {
 
   const estimate = (currentCost * 100) / utilization
   return Number.isFinite(estimate) && estimate > 0 ? estimate : null
+})
+
+interface AnthropicWindowSummaryRow {
+  key: string
+  label: string
+  badgeClass: string
+  hasStats: boolean
+  requests: string
+  requestsTitle: string
+  tokens: string
+  tokensTitle: string
+  usedCost: string
+  usedCostSecondary: string | null
+  usedCostTitle: string
+  estimate: string | null
+  estimateSecondary: string | null
+  estimateTitle: string
+}
+
+interface WindowCostPair {
+  primary: string
+  secondary: string | null
+}
+
+const isValidWindowCost = (value: number | null | undefined): value is number =>
+  typeof value === 'number' && Number.isFinite(value)
+
+const estimateWindowCostAtFull = (
+  progress: UsageProgress | null | undefined,
+  currentCost: number | null | undefined
+): number | null => {
+  if (
+    !progress ||
+    !isValidWindowCost(currentCost) ||
+    currentCost <= 0 ||
+    !Number.isFinite(progress.utilization) ||
+    progress.utilization <= 0
+  ) {
+    return null
+  }
+  const estimate = (currentCost * 100) / progress.utilization
+  return Number.isFinite(estimate) && estimate >= 0 ? estimate : null
+}
+
+// Keep the compact row readable in the narrow account column while the
+// precise value remains available in the tooltip.
+const formatEstimatedWindowCost = (value: number): string => {
+  if (value >= 1000) return `${(value / 1000).toFixed(1)}K`
+  if (value >= 100) return value.toFixed(0)
+  return value.toFixed(2)
+}
+
+const buildUsedCostPair = (
+  accountCost: number | null | undefined,
+  userCost: number | null | undefined
+): WindowCostPair => {
+  if (isValidWindowCost(accountCost) && isValidWindowCost(userCost)) {
+    const account = accountCost.toFixed(2)
+    const user = userCost.toFixed(2)
+    if (account === user) return { primary: `A/U $${account}`, secondary: null }
+    return { primary: `A $${account}`, secondary: `U $${user}` }
+  }
+  if (isValidWindowCost(accountCost)) return { primary: `A $${accountCost.toFixed(2)}`, secondary: null }
+  if (isValidWindowCost(userCost)) return { primary: `U $${userCost.toFixed(2)}`, secondary: null }
+  return { primary: '-', secondary: null }
+}
+
+const buildFullEstimatePair = (
+  accountEstimate: number | null,
+  userEstimate: number | null
+): WindowCostPair => {
+  if (accountEstimate != null && userEstimate != null) {
+    const account = formatEstimatedWindowCost(accountEstimate)
+    const user = formatEstimatedWindowCost(userEstimate)
+    if (account === user) return { primary: `A/U ≈$${account}`, secondary: null }
+    return { primary: `A ≈$${account}`, secondary: `U ≈$${user}` }
+  }
+  if (accountEstimate != null) {
+    return { primary: `A ≈$${formatEstimatedWindowCost(accountEstimate)}`, secondary: null }
+  }
+  if (userEstimate != null) {
+    return { primary: `U ≈$${formatEstimatedWindowCost(userEstimate)}`, secondary: null }
+  }
+  return { primary: '-', secondary: null }
+}
+
+const buildAnthropicWindowSummaryRow = (
+  key: 'five_hour' | 'seven_day',
+  label: string,
+  progress: UsageProgress | null | undefined
+): AnthropicWindowSummaryRow | null => {
+  if (!progress) return null
+  const stats = progress.window_stats
+  const accountEstimate = estimateWindowCostAtFull(progress, stats?.cost)
+  const userEstimate = estimateWindowCostAtFull(progress, stats?.user_cost)
+  const usedCost = buildUsedCostPair(stats?.cost, stats?.user_cost)
+  const fullEstimate = buildFullEstimatePair(accountEstimate, userEstimate)
+  return {
+    key,
+    label,
+    badgeClass: key === 'five_hour'
+      ? 'bg-indigo-100 text-indigo-700 dark:bg-indigo-900/40 dark:text-indigo-300'
+      : 'bg-emerald-100 text-emerald-700 dark:bg-emerald-900/40 dark:text-emerald-300',
+    hasStats: !!stats,
+    requests: stats ? formatCompactNumber(stats.requests, { allowBillions: false }) : '',
+    requestsTitle: stats ? `${stats.requests.toLocaleString('en-US')} req` : '',
+    tokens: stats ? formatCompactNumber(stats.tokens) : '',
+    tokensTitle: stats ? `${stats.tokens.toLocaleString('en-US')} tokens` : '',
+    usedCost: usedCost.primary,
+    usedCostSecondary: usedCost.secondary,
+    usedCostTitle: `${t('usage.accountBilled')} / ${t('usage.userBilled')}`,
+    estimate: fullEstimate.primary === '-' ? null : fullEstimate.primary,
+    estimateSecondary: fullEstimate.secondary,
+    estimateTitle: accountEstimate != null
+      ? t('admin.accounts.usageWindow.estimatedWindowCostTooltip', { cost: accountEstimate.toFixed(2) })
+      : userEstimate != null
+        ? t('admin.accounts.usageWindow.estimatedWindowCostTooltip', { cost: userEstimate.toFixed(2) })
+        : ''
+  }
+}
+
+const anthropicWindowSummaryRows = computed<AnthropicWindowSummaryRow[]>(() => {
+  if (props.account.platform !== 'anthropic') return []
+  const rows: AnthropicWindowSummaryRow[] = []
+  const fiveHour = buildAnthropicWindowSummaryRow('five_hour', '5h', usageInfo.value?.five_hour)
+  const sevenDay = buildAnthropicWindowSummaryRow('seven_day', '7d', usageInfo.value?.seven_day)
+  if (fiveHour) rows.push(fiveHour)
+  if (sevenDay) rows.push(sevenDay)
+  return rows
+})
+
+const anthropicDayOfWeekKeys = [
+  'sunday',
+  'monday',
+  'tuesday',
+  'wednesday',
+  'thursday',
+  'friday',
+  'saturday'
+] as const
+
+const anthropicQuotaAdvice = computed<{ text: string; boxClass: string; dotClass: string } | null>(() => {
+  if (props.account.platform !== 'anthropic') return null
+  const sevenDay = usageInfo.value?.seven_day
+  if (!sevenDay?.resets_at) return null
+
+  const resetAt = new Date(sevenDay.resets_at)
+  const resetMs = resetAt.getTime()
+  if (!Number.isFinite(resetMs)) return null
+
+  const nowMs = Date.now()
+  const remainingMs = resetMs - nowMs
+  const windowMs = 7 * 24 * 60 * 60 * 1000
+  const elapsedMs = windowMs - remainingMs
+  // A valid weekly window must be in progress. Avoid giving advice from stale
+  // snapshots whose reset is already in the past or more than 7d away.
+  if (!Number.isFinite(remainingMs) || remainingMs <= 0 || elapsedMs <= 0 || elapsedMs > windowMs) {
+    return null
+  }
+
+  const weekday = t(`admin.accounts.usageWindow.dayOfWeek.${anthropicDayOfWeekKeys[resetAt.getDay()]}`)
+  const utilization = Number.isFinite(sevenDay.utilization) ? Math.max(0, sevenDay.utilization) : 0
+  const projectedUtilization = (utilization * windowMs) / elapsedMs
+
+  if (projectedUtilization >= 100) {
+    return {
+      text: t('admin.accounts.usageWindow.quotaAdvice.tight', { weekday }),
+      boxClass: 'border-red-200/70 bg-red-50/80 text-red-700 dark:border-red-900/50 dark:bg-red-950/30 dark:text-red-300',
+      dotClass: 'bg-red-500'
+    }
+  }
+  if (projectedUtilization >= 85) {
+    return {
+      text: t('admin.accounts.usageWindow.quotaAdvice.watch', { weekday }),
+      boxClass: 'border-amber-200/70 bg-amber-50/80 text-amber-700 dark:border-amber-900/50 dark:bg-amber-950/30 dark:text-amber-300',
+      dotClass: 'bg-amber-500'
+    }
+  }
+  return {
+    text: t('admin.accounts.usageWindow.quotaAdvice.plenty', { weekday }),
+    boxClass: 'border-emerald-200/70 bg-emerald-50/80 text-emerald-700 dark:border-emerald-900/50 dark:bg-emerald-950/30 dark:text-emerald-300',
+    dotClass: 'bg-emerald-500'
+  }
 })
 
 const openAIUsageRefreshKey = computed(() => buildOpenAIUsageRefreshKey(props.account))

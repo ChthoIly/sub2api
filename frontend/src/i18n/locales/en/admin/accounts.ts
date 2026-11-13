@@ -1748,7 +1748,25 @@ export default {
         passiveSampled: 'Passive',
         activeQuery: 'Query',
         estimatedTotalCost: 'Est. total ${cost}',
-        estimatedTotalCostTooltip: 'Estimated total cost at 100% utilization, based on current window cost and utilization'
+        estimatedTotalCostTooltip: 'Estimated total cost at 100% utilization, based on current window cost and utilization',
+        estimatedWindowCostTooltip: 'Estimated cost at 100% utilization based on current window cost and utilization (about {cost} USD)',
+        summaryTokens: 'Tokens',
+        summaryUsedCost: 'Used cost',
+        summaryFullEstimate: 'At 100%',
+        dayOfWeek: {
+          sunday: 'Sunday',
+          monday: 'Monday',
+          tuesday: 'Tuesday',
+          wednesday: 'Wednesday',
+          thursday: 'Thursday',
+          friday: 'Friday',
+          saturday: 'Saturday'
+        },
+        quotaAdvice: {
+          plenty: 'Usage is on track. Your quota should be comfortable before the {weekday} reset.',
+          watch: 'Usage is on track but the burn rate is a little high. Keep an eye on the remaining quota before the {weekday} reset.',
+          tight: 'At the current burn rate, your quota may run out before the {weekday} reset. Please control usage.'
+        }
       },
       openaiReferral: {
         available: 'Invites left',

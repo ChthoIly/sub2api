@@ -549,7 +549,25 @@ export default {
         passiveSampled: '被动采样',
         activeQuery: '查询',
         estimatedTotalCost: '预计总费用 ${cost}',
-        estimatedTotalCostTooltip: '根据当前窗口费用和使用率估算达到 100% 使用率时的总费用'
+        estimatedTotalCostTooltip: '根据当前窗口费用和使用率估算达到 100% 使用率时的总费用',
+        estimatedWindowCostTooltip: '按当前窗口费用和使用率估算达到 100% 使用率时的费用（约 {cost} USD）',
+        summaryTokens: 'Tokens',
+        summaryUsedCost: '已用费用',
+        summaryFullEstimate: '满额估算',
+        dayOfWeek: {
+          sunday: '星期日',
+          monday: '星期一',
+          tuesday: '星期二',
+          wednesday: '星期三',
+          thursday: '星期四',
+          friday: '星期五',
+          saturday: '星期六'
+        },
+        quotaAdvice: {
+          plenty: '进度正常。在{weekday}重置前，您的额度应该还很充裕。',
+          watch: '进度正常，但消耗略快。到{weekday}重置前，建议留意剩余额度。',
+          tight: '按当前速度，额度可能在{weekday}重置前用完，请注意控制用量。'
+        }
       },
       openaiReferral: {
         available: '可邀请',

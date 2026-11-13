@@ -93,10 +93,14 @@ type apiUsageCache struct {
 	timestamp time.Time
 }
 
-// windowStatsCache 缓存从本地数据库查询的窗口统计（requests, tokens, cost）
+// windowStatsCache 缓存从本地数据库查询的窗口统计（requests, tokens, cost）。
+// 5h 与 7d 的窗口起点不同，必须分别聚合，不能复用同一份统计。
 type windowStatsCache struct {
-	stats     *WindowStats
-	timestamp time.Time
+	fiveHour      *WindowStats
+	sevenDay      *WindowStats
+	fiveHourStart time.Time
+	sevenDayStart time.Time
+	timestamp     time.Time
 }
 
 // antigravityUsageCache 缓存 Antigravity 额度数据
@@ -111,6 +115,7 @@ const (
 	antigravityErrorTTL = 1 * time.Minute        // Antigravity 错误缓存 TTL（可恢复错误）
 	apiQueryMaxJitter   = 800 * time.Millisecond // 用量查询最大随机延迟
 	windowStatsCacheTTL = 1 * time.Minute
+	sevenDayUsageWindow = 7 * 24 * time.Hour
 	openAIProbeCacheTTL = 10 * time.Minute
 	grokProbeRetryTTL   = 1 * time.Minute
 	grokFreeQuotaWindow = 24 * time.Hour
@@ -1411,53 +1416,88 @@ func enrichUsageWithAccountError(info *UsageInfo, account *Account) {
 	info.NeedsReauth = false
 }
 
-// addWindowStats 为 usage 数据添加窗口期统计
-// 使用独立缓存（1 分钟），与 API 缓存分离
+// addWindowStats 为 usage 数据添加窗口期统计。
+// 5h 使用账号当前会话窗口起点；7d 使用上游 reset 时间倒推 7 天，
+// 不能用 now-7d 代替，否则会把上一个额度窗口的尾段算进来。
+// 两者共用 1 分钟缓存，但与 API 缓存分离。
 func (s *AccountUsageService) addWindowStats(ctx context.Context, account *Account, usage *UsageInfo) {
-	// 修复：即使 FiveHour 为 nil，也要尝试获取统计数据
-	// 因为 SevenDay/SevenDaySonnet/SevenDayFable 可能需要
-	if usage.FiveHour == nil && usage.SevenDay == nil && usage.SevenDaySonnet == nil && usage.SevenDayFable == nil {
+	if s == nil || s.cache == nil || s.usageLogRepo == nil || usage == nil {
 		return
 	}
 
-	// 检查窗口统计缓存（1 分钟）
-	var windowStats *WindowStats
-	if cached, ok := s.cache.windowStatsCache.Load(account.ID); ok {
-		if cache, ok := cached.(*windowStatsCache); ok && time.Since(cache.timestamp) < windowStatsCacheTTL {
-			windowStats = cache.stats
+	fiveHourNeeded := usage.FiveHour != nil
+	fiveHourStart := time.Time{}
+	if fiveHourNeeded {
+		fiveHourStart = account.GetCurrentWindowStartTime()
+	}
+	sevenDayStart, sevenDayNeeded := currentSevenDayWindowStart(usage.SevenDay)
+	if !fiveHourNeeded && !sevenDayNeeded {
+		return
+	}
+
+	// 检查窗口统计缓存（1 分钟）。窗口起点变化时立即失效，
+	// 避免跨 5h/7d 重置边界沿用上一窗口的统计。
+	var cached *windowStatsCache
+	if raw, ok := s.cache.windowStatsCache.Load(account.ID); ok {
+		if cache, ok := raw.(*windowStatsCache); ok && time.Since(cache.timestamp) < windowStatsCacheTTL {
+			if fiveHourNeeded && (cache.fiveHour == nil || !cache.fiveHourStart.Equal(fiveHourStart)) {
+				cache = nil
+			}
+			if sevenDayNeeded && (cache.sevenDay == nil || !cache.sevenDayStart.Equal(sevenDayStart)) {
+				cache = nil
+			}
+			cached = cache
 		}
 	}
 
-	// 如果没有缓存，从数据库查询
-	if windowStats == nil {
-		// 使用统一的窗口开始时间计算逻辑（考虑窗口过期情况）
-		startTime := account.GetCurrentWindowStartTime()
+	if cached == nil {
+		cached = &windowStatsCache{
+			timestamp:     time.Now(),
+			fiveHourStart: fiveHourStart,
+			sevenDayStart: sevenDayStart,
+		}
+		queryFailed := false
 
-		stats, err := s.usageLogRepo.GetAccountWindowStats(ctx, account.ID, startTime)
-		if err != nil {
-			log.Printf("Failed to get window stats for account %d: %v", account.ID, err)
-			return
+		if fiveHourNeeded {
+			stats, err := s.usageLogRepo.GetAccountWindowStats(ctx, account.ID, fiveHourStart)
+			if err != nil {
+				log.Printf("Failed to get 5h window stats for account %d: %v", account.ID, err)
+				queryFailed = true
+			} else {
+				cached.fiveHour = windowStatsFromAccountStats(stats)
+			}
+		}
+		if sevenDayNeeded {
+			stats, err := s.usageLogRepo.GetAccountWindowStats(ctx, account.ID, sevenDayStart)
+			if err != nil {
+				log.Printf("Failed to get 7d window stats for account %d: %v", account.ID, err)
+				queryFailed = true
+			} else {
+				cached.sevenDay = windowStatsFromAccountStats(stats)
+			}
 		}
 
-		windowStats = &WindowStats{
-			Requests:     stats.Requests,
-			Tokens:       stats.Tokens,
-			Cost:         stats.Cost,
-			StandardCost: stats.StandardCost,
-			UserCost:     stats.UserCost,
+		// 查询失败时不缓存，下一轮请求可以立即重试。
+		if !queryFailed {
+			s.cache.windowStatsCache.Store(account.ID, cached)
 		}
-
-		// 缓存窗口统计（1 分钟）
-		s.cache.windowStatsCache.Store(account.ID, &windowStatsCache{
-			stats:     windowStats,
-			timestamp: time.Now(),
-		})
 	}
 
-	// 为 FiveHour 添加 WindowStats（5h 窗口统计）
-	if usage.FiveHour != nil {
-		usage.FiveHour.WindowStats = windowStats
+	if usage.FiveHour != nil && cached.fiveHour != nil {
+		usage.FiveHour.WindowStats = cached.fiveHour
 	}
+	if usage.SevenDay != nil && cached.sevenDay != nil {
+		usage.SevenDay.WindowStats = cached.sevenDay
+	}
+}
+
+// currentSevenDayWindowStart 根据上游 7d reset 计算当前额度窗口起点。
+// reset 缺失或已过期时不猜测 now-7d，避免统计口径退化成滚动 7 天。
+func currentSevenDayWindowStart(progress *UsageProgress) (time.Time, bool) {
+	if progress == nil || progress.ResetsAt == nil || !time.Now().Before(*progress.ResetsAt) {
+		return time.Time{}, false
+	}
+	return progress.ResetsAt.Add(-sevenDayUsageWindow), true
 }
 
 // GetTodayStats 获取账号今日统计

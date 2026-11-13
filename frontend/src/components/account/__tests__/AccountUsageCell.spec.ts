@@ -2087,4 +2087,113 @@ describe('AccountUsageCell', () => {
     expect(wrapper.text()).not.toContain('7d S')
     expect(wrapper.text()).not.toContain('7d F')
   })
+  it('Anthropic OAuth 以 4x2 展示 5h/7d 实际用量和 100% 额度估算', async () => {
+    getUsage.mockResolvedValue({
+      source: 'passive',
+      five_hour: {
+        utilization: 20,
+        resets_at: '2026-11-13T06:30:00Z',
+        remaining_seconds: 3600,
+        window_stats: {
+          requests: 504,
+          tokens: 76_400_000,
+          cost: 34.47,
+          standard_cost: 34.47,
+          user_cost: 34.47
+        }
+      },
+      seven_day: {
+        utilization: 66,
+        resets_at: '2026-11-15T01:00:00Z',
+        remaining_seconds: 300000,
+        window_stats: {
+          requests: 7149,
+          tokens: 1_352_926_899,
+          cost: 714.345984,
+          standard_cost: 714.345984,
+          user_cost: 714.345984
+        }
+      }
+    })
+
+    const wrapper = mount(AccountUsageCell, {
+      props: {
+        account: makeAccount({
+          id: 3101,
+          platform: 'anthropic',
+          type: 'oauth',
+          extra: {}
+        })
+      },
+      global: {
+        stubs: {
+          UsageProgressBar: true,
+          AccountQuotaInfo: true
+        }
+      }
+    })
+
+    await flushPromises()
+
+    const summary = wrapper.get('[data-testid="anthropic-window-summary"]')
+    const rows = wrapper.findAll('[data-testid="anthropic-window-summary-row"]')
+    expect(rows).toHaveLength(2)
+    for (const row of rows) expect(row.classes()).toContain('grid-cols-4')
+    expect(wrapper.findAll('[data-testid="anthropic-window-summary-cell"]')).toHaveLength(8)
+
+    const text = summary.text()
+    expect(text).toContain('5h')
+    expect(text).toContain('504 req')
+    expect(text).toContain('76.4M')
+    expect(text).toContain('A/U $34.47')
+    expect(text).toContain('A/U ≈$172')
+    expect(text).toContain('7d')
+    expect(text).toContain('7.1K req')
+    expect(text).toContain('1.4B')
+    expect(text).toContain('A/U $714.35')
+    expect(text).toContain('A/U ≈$1.1K')
+  })
+
+  it.each([
+    { utilization: 30, expectedKey: 'quotaAdvice.plenty', expectedClass: 'bg-emerald-50/80' },
+    { utilization: 80, expectedKey: 'quotaAdvice.watch', expectedClass: 'bg-amber-50/80' },
+    { utilization: 90, expectedKey: 'quotaAdvice.tight', expectedClass: 'bg-red-50/80' }
+  ])(
+    'Anthropic OAuth 根据 7d 使用进度生成建议 ($utilization%)',
+    async ({ utilization, expectedKey, expectedClass }) => {
+      const resetAt = new Date(Date.now() + 24 * 60 * 60 * 1000).toISOString()
+      getUsage.mockResolvedValue({
+        source: 'passive',
+        seven_day: {
+          utilization,
+          resets_at: resetAt,
+          remaining_seconds: 24 * 60 * 60
+        }
+      })
+
+      const wrapper = mount(AccountUsageCell, {
+        props: {
+          account: makeAccount({
+            id: 3102,
+            platform: 'anthropic',
+            type: 'oauth',
+            extra: {}
+          })
+        },
+        global: {
+          stubs: {
+            UsageProgressBar: true,
+            AccountQuotaInfo: true
+          }
+        }
+      })
+
+      await flushPromises()
+
+      const advice = wrapper.get('[data-testid="anthropic-quota-advice"]')
+      expect(advice.text()).toContain(expectedKey)
+      expect(advice.classes()).toContain(expectedClass)
+    }
+  )
+
 })
