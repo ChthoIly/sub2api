@@ -81,6 +81,7 @@
               @page="changePage"
               @page-size="changePageSize"
               @view="openEvent"
+              @review="reviewSelectedEvents"
               @delete="requestSingleDelete"
               @batch-delete="requestBatchDelete"
               @preview-delete="requestFilterDeletePreview"
@@ -168,6 +169,7 @@ import type {
   PromptEventPage,
   PromptLoadErrors,
   PromptProbeResult,
+  PromptReviewStatus,
 } from './types'
 import { buildUpdateRequest, cloneData, configToDraft, draftFingerprint, emptyEventFilters } from './viewModel'
 
@@ -196,7 +198,7 @@ const deletePreview = ref<PromptDeletePreview | null>(null)
 const deletePreviewFilters = ref<PromptEventFilters | null>(null)
 const showBlockingConfirmation = ref(false)
 const deleteRequest = reactive<{ mode: '' | 'single' | 'batch'; ids: number[] }>({ mode: '', ids: [] })
-const loading = reactive({ config: false, runtime: false, groups: false, events: false, saving: false, detail: false, deleting: false, previewing: false })
+const loading = reactive({ config: false, runtime: false, groups: false, events: false, saving: false, detail: false, deleting: false, previewing: false, reviewing: false })
 const loadErrors = reactive<PromptLoadErrors>({ config: '', runtime: '', groups: '', events: '' })
 const dirty = computed(() => draftFingerprint(draft.value) !== draftFingerprint(serverConfig.value))
 
@@ -361,6 +363,21 @@ async function openEvent(id: number) {
   try { activeEvent.value = await promptAuditAPI.getEvent(id) }
   catch (error) { appStore.showError(errorMessage(error, 'admin.promptAudit.errors.loadDetail')); showEventDetail.value = false }
   finally { loading.detail = false }
+}
+async function reviewSelectedEvents(status: PromptReviewStatus) {
+  const ids = [...selectedEventIds.value]
+  if (ids.length === 0 || loading.reviewing) return
+  loading.reviewing = true
+  try {
+    const result = await promptAuditAPI.reviewEvents(ids, status)
+    appStore.showSuccess(t(status === 'confirmed_false_positive' ? 'admin.promptAudit.messages.reviewed' : 'admin.promptAudit.messages.unreviewed', { count: result.updated }))
+    selectedEventIds.value = []
+    await loadEvents()
+  } catch (error) {
+    appStore.showError(errorMessage(error, 'admin.promptAudit.errors.review'))
+  } finally {
+    loading.reviewing = false
+  }
 }
 function closeEventDetail() { showEventDetail.value = false; activeEvent.value = null }
 function requestSingleDelete(id: number) { deleteRequest.mode = 'single'; deleteRequest.ids = [id] }

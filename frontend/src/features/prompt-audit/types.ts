@@ -1,6 +1,7 @@
 export type PromptAuditMode = 'off' | 'async_audit' | 'blocking'
 export type PromptDecision = 'pass' | 'flag' | 'critical'
 export type PromptRiskLevel = 'low' | 'medium' | 'high' | 'critical'
+export type PromptReviewStatus = 'unreviewed' | 'confirmed_false_positive'
 
 export interface PromptAuditEndpoint {
   id: string
@@ -192,11 +193,19 @@ export interface PromptAuditEvent {
   chunk_total: number
   latency_ms: number
   issue_summaries: PromptIssueSummary[]
+  review_status: PromptReviewStatus
+  review_note: string
+  reviewed_by?: number
+  reviewed_at?: string
+  effective_decision: PromptDecision
+  effective_risk_level: PromptRiskLevel
+  effective_action: 'Allow' | 'Warn' | 'Block' | string
   created_at: string
 }
 
 export interface PromptEventFilters {
   decision: string
+  review_status: string
   risk_level: string
   endpoint: string
   group_id: string
@@ -243,4 +252,8 @@ export interface PromptLoadErrors {
   runtime: string
   groups: string
   events: string
+}
+
+export interface PromptReviewResult {
+  updated: number
 }

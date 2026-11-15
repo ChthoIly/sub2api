@@ -93,6 +93,7 @@ export function draftFingerprint(draft: PromptAuditDraft | null): string {
 export function emptyEventFilters(): PromptEventFilters {
   return {
     decision: '',
+    review_status: '',
     risk_level: '',
     endpoint: '',
     group_id: '',
@@ -114,7 +115,7 @@ function toISO(value: string): string | undefined {
 
 export function eventQueryParams(filters: PromptEventFilters): Record<string, string | number> {
   const result: Record<string, string | number> = {}
-  for (const key of ['decision', 'risk_level', 'endpoint', 'request_id', 'prompt_hash', 'keyword'] as const) {
+  for (const key of ['decision', 'review_status', 'risk_level', 'endpoint', 'request_id', 'prompt_hash', 'keyword'] as const) {
     const value = filters[key].trim()
     if (value) result[key] = value
   }

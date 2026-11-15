@@ -16,7 +16,17 @@
             <pre class="mt-2 max-h-[min(46vh,26rem)] overflow-auto whitespace-pre-wrap break-words rounded-lg bg-gray-50 p-4 text-sm text-gray-700 dark:bg-dark-900 dark:text-dark-200" data-test="summary-prompt-full">{{ displayPrompt(event) }}</pre>
           </div>
           <dl class="grid grid-cols-[auto_1fr] gap-x-4 gap-y-2 text-sm">
-            <dt class="text-gray-500">{{ t('admin.promptAudit.events.decision') }}</dt><dd class="font-medium text-gray-900 dark:text-white">{{ formatDecisionAction(event.decision, event.action) }}</dd>
+            <dt class="text-gray-500">{{ t('admin.promptAudit.events.originalDecision') }}</dt><dd class="font-medium text-gray-900 dark:text-white">{{ formatDecisionAction(event.decision, event.action) }}</dd>
+            <dt class="text-gray-500">{{ t('admin.promptAudit.events.effectiveDecision') }}</dt><dd class="font-medium text-gray-900 dark:text-white">{{ formatDecisionAction(event.effective_decision || event.decision, event.effective_action || event.action) }}</dd>
+            <dt class="text-gray-500">{{ t('admin.promptAudit.events.reviewStatus') }}</dt>
+            <dd>
+              <span v-if="event.review_status === 'confirmed_false_positive'" class="rounded-full bg-sky-100 px-2 py-0.5 text-xs font-medium text-sky-700 dark:bg-sky-950/50 dark:text-sky-300">{{ t('admin.promptAudit.events.reviewStatuses.confirmed_false_positive') }}</span>
+              <span v-else>{{ t('admin.promptAudit.events.reviewStatuses.unreviewed') }}</span>
+            </dd>
+            <template v-if="event.review_status === 'confirmed_false_positive'">
+              <dt class="text-gray-500">{{ t('admin.promptAudit.events.reviewNote') }}</dt><dd>{{ event.review_note || '—' }}</dd>
+              <dt class="text-gray-500">{{ t('admin.promptAudit.events.reviewedAt') }}</dt><dd>{{ event.reviewed_at ? formatDate(event.reviewed_at) : '—' }}</dd>
+            </template>
             <dt class="text-gray-500">{{ t('admin.promptAudit.events.user') }}</dt><dd>{{ event.snapshot.username || '—' }}</dd>
             <dt class="text-gray-500">{{ t('admin.promptAudit.events.email') }}</dt><dd>{{ event.snapshot.user_email || '—' }}</dd>
             <dt class="text-gray-500">{{ t('admin.promptAudit.events.apiKey') }}</dt><dd>{{ event.snapshot.api_key_name || '—' }}</dd>
@@ -97,6 +107,9 @@ function displayPrompt(event: PromptAuditEvent): string {
   return event.snapshot.full_prompt || event.snapshot.redacted_preview || '—'
 }
 
+function formatDate(value: string): string {
+  return new Intl.DateTimeFormat(undefined, { dateStyle: 'medium', timeStyle: 'medium' }).format(new Date(value))
+}
 function formatDecisionAction(decision: string, action: string): string {
   const decisionLabel = DECISIONS.has(decision) ? t(`admin.promptAudit.decisions.${decision}`) : decision
   const actionLabel = ACTIONS.has(action) ? t(`admin.promptAudit.actions.${action}`) : action
@@ -127,6 +140,10 @@ function formatGuardReturn(event: PromptAuditEvent): string {
     decision: DECISIONS.has(event.decision) ? t(`admin.promptAudit.decisions.${event.decision}`) : event.decision,
     risk_level: RISK_LEVELS.has(event.risk_level) ? t(`admin.promptAudit.riskLevels.${event.risk_level}`) : event.risk_level,
     action: ACTIONS.has(event.action) ? t(`admin.promptAudit.actions.${event.action}`) : event.action,
+    review_status: event.review_status,
+    effective_decision: event.effective_decision || event.decision,
+    effective_risk_level: event.effective_risk_level || event.risk_level,
+    effective_action: event.effective_action || event.action,
     categories: event.categories.map(translateCategory),
     matched_scanners: event.matched_scanners.map(translateCategory),
     scanner_scores: event.scanner_scores,

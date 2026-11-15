@@ -60,7 +60,16 @@ type Event struct {
 	ChunkTotal      int                `json:"chunk_total"`
 	LatencyMS       int                `json:"latency_ms"`
 	IssueSummaries  []IssueSummary     `json:"issue_summaries"`
-	CreatedAt       time.Time          `json:"created_at"`
+	ReviewStatus    ReviewStatus       `json:"review_status"`
+	ReviewNote      string             `json:"review_note"`
+	ReviewedBy      *int64             `json:"reviewed_by,omitempty"`
+	ReviewedAt      *time.Time         `json:"reviewed_at,omitempty"`
+	// Effective* fields are what the admin UI and filters use. The original
+	// scanner fields above stay untouched so the audit trail remains intact.
+	EffectiveDecision  EventDecision `json:"effective_decision"`
+	EffectiveRiskLevel RiskLevel     `json:"effective_risk_level"`
+	EffectiveAction    Action        `json:"effective_action"`
+	CreatedAt          time.Time     `json:"created_at"`
 }
 
 type JobRepository interface {

@@ -11,6 +11,8 @@ import type {
   PromptEventPage,
   PromptProbeResult,
   PromptAuditEndpointDraft,
+  PromptReviewResult,
+  PromptReviewStatus,
 } from './types'
 import { eventFilterPayload, eventQueryParams } from './viewModel'
 
@@ -64,6 +66,15 @@ export async function getEvent(id: number): Promise<PromptAuditEvent> {
   return data
 }
 
+export async function reviewEvents(
+  ids: number[],
+  status: PromptReviewStatus,
+  note = '',
+): Promise<PromptReviewResult> {
+  const { data } = await apiClient.post<PromptReviewResult>(`${basePath}/events/review`, { ids, status, note })
+  return data
+}
+
 export async function deleteEvent(id: number): Promise<PromptDeleteResult> {
   const { data } = await apiClient.delete<PromptDeleteResult>(`${basePath}/events/${id}`)
   return data
@@ -110,6 +121,7 @@ export const promptAuditAPI = {
   getRuntime,
   listEvents,
   getEvent,
+  reviewEvents,
   deleteEvent,
   batchDeleteEvents,
   previewDelete,

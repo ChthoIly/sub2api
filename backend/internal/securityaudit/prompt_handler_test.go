@@ -25,6 +25,7 @@ type fakePromptAdminService struct {
 	runtime      RuntimeSnapshot
 	list         func(context.Context, EventFilter, int, int) (*EventPage, error)
 	get          func(context.Context, int64) (*Event, error)
+	review       func(context.Context, ReviewEventsRequest, int64) (*ReviewEventsResult, error)
 	deleteOne    func(context.Context, int64) (*DeleteResult, error)
 	deleteIDs    func(context.Context, []int64) (*DeleteResult, error)
 	preview      func(context.Context, EventFilter, int64) (*DeletePreview, error)
@@ -59,6 +60,13 @@ func (s *fakePromptAdminService) GetEvent(ctx context.Context, id int64) (*Event
 	}
 	return s.get(ctx, id)
 }
+func (s *fakePromptAdminService) ReviewEvents(ctx context.Context, req ReviewEventsRequest, actorID int64) (*ReviewEventsResult, error) {
+	if s.review == nil {
+		return &ReviewEventsResult{}, nil
+	}
+	return s.review(ctx, req, actorID)
+}
+
 func (s *fakePromptAdminService) DeleteEvent(ctx context.Context, id int64) (*DeleteResult, error) {
 	if s.deleteOne == nil {
 		return &DeleteResult{}, nil
@@ -101,6 +109,7 @@ func promptAdminRouter(service PromptAdminService) *gin.Engine {
 	group.GET("/events", handler.ListEvents)
 	group.GET("/events/:id", handler.GetEvent)
 	group.DELETE("/events/:id", handler.DeleteEvent)
+	group.POST("/events/review", handler.ReviewEvents)
 	group.POST("/events/batch-delete", handler.BatchDelete)
 	group.POST("/events/delete-preview", handler.DeletePreview)
 	group.POST("/events/delete-by-filter", handler.DeleteByFilter)
@@ -215,6 +224,8 @@ func TestPromptAdminRejectsInvalidEventIDsTimesAndPagination(t *testing.T) {
 		{http.MethodGet, "/admin/prompt-audit/events?page=0", nil, "prompt_audit_invalid_pagination"},
 		{http.MethodGet, "/admin/prompt-audit/events?page=9223372036854775807", nil, "prompt_audit_invalid_pagination"},
 		{http.MethodPost, "/admin/prompt-audit/events/batch-delete", map[string]any{"ids": []int64{1, -2}}, "prompt_audit_invalid_event_id"},
+		{http.MethodPost, "/admin/prompt-audit/events/review", map[string]any{"ids": []int64{}, "status": "confirmed_false_positive"}, "prompt_audit_invalid_review_batch"},
+		{http.MethodPost, "/admin/prompt-audit/events/review", map[string]any{"ids": []int64{1}, "status": "bad"}, "prompt_audit_invalid_review_status"},
 	} {
 		response := promptAdminRequest(t, router, tc.method, tc.path, tc.body)
 		require.Equalf(t, http.StatusBadRequest, response.Code, "%s %s", tc.method, tc.path)
@@ -261,4 +272,23 @@ func TestPromptAdminDeleteConfirmationErrorsStayGeneric(t *testing.T) {
 	require.Contains(t, response.Body.String(), "prompt_audit_delete_confirmation_invalid")
 	require.NotContains(t, response.Body.String(), "sensitive-token")
 	require.NotContains(t, response.Body.String(), "secret-confirmation")
+}
+
+func TestPromptAdminReviewEventsValidatesAndPassesActor(t *testing.T) {
+	var got ReviewEventsRequest
+	var gotActor int64
+	service := &fakePromptAdminService{review: func(_ context.Context, request ReviewEventsRequest, actorID int64) (*ReviewEventsResult, error) {
+		got, gotActor = request, actorID
+		return &ReviewEventsResult{Updated: 2}, nil
+	}}
+	router := promptAdminRouter(service)
+	response := promptAdminRequest(t, router, http.MethodPost, "/admin/prompt-audit/events/review", ReviewEventsRequest{
+		IDs: []int64{5, 5, 6}, Status: ReviewStatusFalsePositive, Note: " trusted Claude Code harness ",
+	})
+	require.Equal(t, http.StatusOK, response.Code)
+	require.Equal(t, []int64{5, 6}, got.IDs)
+	require.Equal(t, ReviewStatusFalsePositive, got.Status)
+	require.Equal(t, "trusted Claude Code harness", got.Note)
+	require.Equal(t, int64(42), gotActor)
+	require.Contains(t, response.Body.String(), `"updated":2`)
 }

@@ -42,3 +42,14 @@ describe('Prompt Audit API', () => {
     }))
   })
 })
+
+it('posts manual review decisions without touching the raw scanner fields', async () => {
+  client.post.mockResolvedValue({ data: { updated: 2 } })
+  const result = await promptAuditAPI.reviewEvents([4, 5], 'confirmed_false_positive', 'trusted Claude Code harness')
+  expect(client.post).toHaveBeenCalledWith('/admin/prompt-audit/events/review', {
+    ids: [4, 5],
+    status: 'confirmed_false_positive',
+    note: 'trusted Claude Code harness',
+  })
+  expect(result.updated).toBe(2)
+})

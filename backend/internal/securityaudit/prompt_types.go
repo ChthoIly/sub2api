@@ -66,6 +66,23 @@ const (
 	ActionBlock Action = "Block"
 )
 
+type ReviewStatus string
+
+const (
+	ReviewStatusUnreviewed    ReviewStatus = "unreviewed"
+	ReviewStatusFalsePositive ReviewStatus = "confirmed_false_positive"
+)
+
+type ReviewEventsRequest struct {
+	IDs    []int64      `json:"ids"`
+	Status ReviewStatus `json:"status"`
+	Note   string       `json:"note"`
+}
+
+type ReviewEventsResult struct {
+	Updated int64 `json:"updated"`
+}
+
 type Request struct {
 	RequestID  string
 	UserID     int64

@@ -20,6 +20,7 @@ type PromptAdminService interface {
 	Runtime(context.Context) RuntimeSnapshot
 	ListEvents(context.Context, EventFilter, int, int) (*EventPage, error)
 	GetEvent(context.Context, int64) (*Event, error)
+	ReviewEvents(context.Context, ReviewEventsRequest, int64) (*ReviewEventsResult, error)
 	DeleteEvent(context.Context, int64) (*DeleteResult, error)
 	DeleteEventsByIDs(context.Context, []int64) (*DeleteResult, error)
 	PreviewDelete(context.Context, EventFilter, int64) (*DeletePreview, error)
@@ -125,6 +126,51 @@ func (h *PromptAdminHandler) GetEvent(c *gin.Context) {
 		return
 	}
 	response.Success(c, event)
+}
+
+func (h *PromptAdminHandler) ReviewEvents(c *gin.Context) {
+	var request ReviewEventsRequest
+	if err := c.ShouldBindJSON(&request); err != nil {
+		setPromptAdminAudit(c, "failed", "prompt_audit_invalid_review_batch", nil)
+		response.ErrorFrom(c, infraerrors.BadRequest("prompt_audit_invalid_review_batch", "批量复核请求无效"))
+		return
+	}
+	if len(request.IDs) == 0 || len(request.IDs) > 500 {
+		setPromptAdminAudit(c, "failed", "prompt_audit_invalid_review_batch", map[string]any{"requested_count": len(request.IDs)})
+		response.ErrorFrom(c, infraerrors.BadRequest("prompt_audit_invalid_review_batch", "批量复核必须包含 1-500 个事件 ID"))
+		return
+	}
+	for _, id := range request.IDs {
+		if id <= 0 {
+			setPromptAdminAudit(c, "failed", "prompt_audit_invalid_event_id", map[string]any{"requested_count": len(request.IDs)})
+			response.ErrorFrom(c, infraerrors.BadRequest("prompt_audit_invalid_event_id", "事件 ID 无效"))
+			return
+		}
+	}
+	request.Status = ReviewStatus(strings.TrimSpace(string(request.Status)))
+	if request.Status != ReviewStatusUnreviewed && request.Status != ReviewStatusFalsePositive {
+		setPromptAdminAudit(c, "failed", "prompt_audit_invalid_review_status", nil)
+		response.ErrorFrom(c, infraerrors.BadRequest("prompt_audit_invalid_review_status", "复核状态无效"))
+		return
+	}
+	request.Note = strings.TrimSpace(request.Note)
+	if len([]rune(request.Note)) > 512 {
+		setPromptAdminAudit(c, "failed", "prompt_audit_invalid_review_note", nil)
+		response.ErrorFrom(c, infraerrors.BadRequest("prompt_audit_invalid_review_note", "复核备注最多 512 个字符"))
+		return
+	}
+	request.IDs = canonicalInt64s(request.IDs)
+	result, err := h.service.ReviewEvents(c.Request.Context(), request, adminID(c))
+	if err != nil {
+		setPromptAdminAudit(c, "failed", "prompt_audit_review_failed", map[string]any{"requested_count": len(request.IDs)})
+		response.ErrorFrom(c, infraerrors.InternalServer("prompt_audit_review_failed", "批量复核失败"))
+		return
+	}
+	setPromptAdminAudit(c, "success", "", map[string]any{
+		"reviewed_count": result.Updated,
+		"review_status":  string(request.Status),
+	})
+	response.Success(c, result)
 }
 
 func (h *PromptAdminHandler) DeleteEvent(c *gin.Context) {
@@ -275,7 +321,8 @@ func eventFilterFromQuery(c *gin.Context) (EventFilter, error) {
 	}
 	filter := EventFilter{
 		Decision: c.Query("decision"), RiskLevel: c.Query("risk_level"), Endpoint: c.Query("endpoint"),
-		GroupID: groupID, UserID: userID, APIKeyID: apiKeyID, RequestID: c.Query("request_id"),
+		ReviewStatus: c.Query("review_status"),
+		GroupID:      groupID, UserID: userID, APIKeyID: apiKeyID, RequestID: c.Query("request_id"),
 		PromptHash: c.Query("prompt_hash"), Keyword: c.Query("keyword"),
 	}
 	if value := strings.TrimSpace(c.Query("start_at")); value != "" {

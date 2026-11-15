@@ -64,6 +64,9 @@ export default {
     events: {
       title: '审计事件', description: '按身份、入口、风险、Hash 和时间复核事件，详情中可查看完整提示词。', decision: '判定', risk: '风险等级', endpoint: '入口', groupId: '分组 ID', userId: '用户 ID', apiKeyId: 'API Key ID', keyword: '关键词',
       startAt: '开始时间', endAt: '结束时间', deleteSelected: '删除选中项（{count}）', deleteByFilter: '按筛选删除',
+      reviewStatus: '复核状态', reviewStatuses: { unreviewed: '未复核', confirmed_false_positive: '误报，已通过' },
+      markFalsePositive: '标记选中为误报（{count}）', clearReview: '撤销复核（{count}）',
+      originalResult: '原始判定：{decision} · {risk}', originalDecision: '原始判定', effectiveDecision: '复核后结果', reviewNote: '复核备注', reviewedAt: '复核时间',
       filterDeleteDialogTitle: '按筛选删除审计事件', filterDeleteDialogDesc: '选择删除的时间范围与风险条件后即可执行删除；删除不可恢复。如需提前查看匹配数量，可先获取删除预览。',
       filterTimeRange: '删除时间范围', filterTimeRangeHint: '将删除所选截止时间之前产生的事件；预览后新产生的事件不受影响。',
       timePresets: { '1d': '1 天前', '7d': '7 天前', '30d': '30 天前', '90d': '90 天前', all: '全部时间', custom: '自定义范围' },
@@ -89,9 +92,9 @@ export default {
       },
       deleteConfirmTitle: '删除审计事件？', deleteConfirmMessage: '将永久删除 {count} 条事件及符合条件的孤立任务。', filterDeleteCount: '服务端快照匹配 {count} 条事件。', snapshotMax: '快照最大事件 ID', expiresAt: '确认令牌过期时间', filterDeleteWarning: '只删除预览高水位内的事件；预览后产生的新事件会保留。筛选一旦变化，必须重新预览。', confirmFilterDelete: '确认永久删除',
     },
-    messages: { saved: '提示词审计配置已保存，明文 API Key 状态已清除。', probeSucceeded: '审计节点连接正常。', deleted: '已删除 {count} 条审计事件。' },
+    messages: { saved: '提示词审计配置已保存，明文 API Key 状态已清除。', probeSucceeded: '审计节点连接正常。', deleted: '已删除 {count} 条审计事件。', reviewed: '已将 {count} 条事件标记为误报并通过。', unreviewed: '已撤销 {count} 条事件的人工复核。' },
     errors: {
-      loadConfig: '无法加载提示词审计配置。', loadRuntime: '无法加载提示词审计运行态。', loadGroups: '无法加载分组列表。', loadEvents: '无法加载审计事件。', loadDetail: '无法加载事件详情。', saveConfig: '配置保存失败。', probe: '节点探测失败。', delete: '事件删除失败。', previewDelete: '无法生成删除预览，请检查时间范围。', deleteConfirmation: '删除确认无效或已过期，请重新预览。',
+      loadConfig: '无法加载提示词审计配置。', loadRuntime: '无法加载提示词审计运行态。', loadGroups: '无法加载分组列表。', loadEvents: '无法加载审计事件。', loadDetail: '无法加载事件详情。', saveConfig: '配置保存失败。', review: '事件复核失败。', probe: '节点探测失败。', delete: '事件删除失败。', previewDelete: '无法生成删除预览，请检查时间范围。', deleteConfirmation: '删除确认无效或已过期，请重新预览。',
       prompt_audit_config_conflict: '配置已被其他管理员更新。请重新加载服务端配置，再决定如何合并本地草稿。',
       prompt_audit_encryption_key_required: '未配置固定加密密钥，审计节点 API Key 将在服务重启后失效。请先设置 TOTP_ENCRYPTION_KEY 环境变量并重启服务。',
       prompt_guard_requires_audit_enabled: '开启同步阻止前必须先启用提示词审计。', prompt_audit_invalid_endpoint: '审计节点配置无效。', prompt_audit_endpoint_required: '启用审计前至少需要一个启用节点。', prompt_audit_groups_required: '指定分组模式至少需要选择一个分组。', prompt_audit_scanners_required: '至少需要启用一个风险分类。',

@@ -15,17 +15,18 @@ import (
 )
 
 type EventFilter struct {
-	Decision   string     `json:"decision,omitempty"`
-	RiskLevel  string     `json:"risk_level,omitempty"`
-	Endpoint   string     `json:"endpoint,omitempty"`
-	GroupID    *int64     `json:"group_id,omitempty"`
-	UserID     *int64     `json:"user_id,omitempty"`
-	APIKeyID   *int64     `json:"api_key_id,omitempty"`
-	RequestID  string     `json:"request_id,omitempty"`
-	PromptHash string     `json:"prompt_hash,omitempty"`
-	Keyword    string     `json:"keyword,omitempty"`
-	StartAt    *time.Time `json:"start_at,omitempty"`
-	EndAt      *time.Time `json:"end_at,omitempty"`
+	Decision     string     `json:"decision,omitempty"`
+	RiskLevel    string     `json:"risk_level,omitempty"`
+	Endpoint     string     `json:"endpoint,omitempty"`
+	GroupID      *int64     `json:"group_id,omitempty"`
+	UserID       *int64     `json:"user_id,omitempty"`
+	APIKeyID     *int64     `json:"api_key_id,omitempty"`
+	RequestID    string     `json:"request_id,omitempty"`
+	PromptHash   string     `json:"prompt_hash,omitempty"`
+	Keyword      string     `json:"keyword,omitempty"`
+	ReviewStatus string     `json:"review_status,omitempty"`
+	StartAt      *time.Time `json:"start_at,omitempty"`
+	EndAt        *time.Time `json:"end_at,omitempty"`
 }
 
 type EventPage struct {
@@ -58,6 +59,7 @@ type EventRepository interface {
 	DeleteEventsByIDs(ctx context.Context, ids []int64) (*DeleteResult, error)
 	PreviewDelete(ctx context.Context, filter EventFilter) (*DeletePreview, error)
 	DeleteEventsByFilter(ctx context.Context, filter EventFilter, snapshotMaxID int64, batchSize int) (*DeleteResult, error)
+	ReviewEvents(ctx context.Context, ids []int64, status ReviewStatus, note string, reviewerID int64) (*ReviewEventsResult, error)
 }
 
 func (r *PostgreSQLRepository) ListEvents(ctx context.Context, filter EventFilter, page, pageSize int) (*EventPage, error) {
@@ -108,6 +110,38 @@ func (r *PostgreSQLRepository) GetEvent(ctx context.Context, id int64) (*Event, 
 		return nil, ErrEventNotFound
 	}
 	return event, err
+}
+
+func (r *PostgreSQLRepository) ReviewEvents(ctx context.Context, ids []int64, status ReviewStatus, note string, reviewerID int64) (*ReviewEventsResult, error) {
+	ids = canonicalInt64s(ids)
+	if len(ids) == 0 {
+		return &ReviewEventsResult{}, nil
+	}
+	if len(ids) > 500 {
+		return nil, errors.New("prompt audit review batch exceeds 500 events")
+	}
+	if status != ReviewStatusUnreviewed && status != ReviewStatusFalsePositive {
+		return nil, errors.New("prompt audit review status invalid")
+	}
+	note = strings.TrimSpace(note)
+	if len([]rune(note)) > 512 {
+		note = string([]rune(note)[:512])
+	}
+	result, err := r.db.ExecContext(ctx, `
+UPDATE prompt_audit_events
+SET review_status=$2::text,
+review_note=$3::text,
+reviewed_by=CASE WHEN $2::text='confirmed_false_positive' THEN $4::bigint ELSE NULL END,
+reviewed_at=CASE WHEN $2::text='confirmed_false_positive' THEN NOW() ELSE NULL END
+WHERE id=ANY($1)`, pq.Array(ids), string(status), note, nullableID(reviewerID))
+	if err != nil {
+		return nil, err
+	}
+	updated, err := result.RowsAffected()
+	if err != nil {
+		return nil, err
+	}
+	return &ReviewEventsResult{Updated: updated}, nil
 }
 
 func (r *PostgreSQLRepository) DeleteEvent(ctx context.Context, id int64) (*DeleteResult, error) {
@@ -251,6 +285,7 @@ func canonicalEventFilter(filter EventFilter) EventFilter {
 	filter.RequestID = strings.TrimSpace(filter.RequestID)
 	filter.PromptHash = strings.ToLower(strings.TrimSpace(filter.PromptHash))
 	filter.Keyword = strings.TrimSpace(filter.Keyword)
+	filter.ReviewStatus = strings.ToLower(strings.TrimSpace(filter.ReviewStatus))
 	if filter.StartAt != nil {
 		value := filter.StartAt.UTC()
 		filter.StartAt = &value
@@ -271,10 +306,13 @@ func buildEventWhere(filter EventFilter, firstIndex int) (string, []any) {
 		args = append(args, value)
 	}
 	if filter.Decision != "" {
-		add(" AND e.decision=$%d", filter.Decision)
+		add(" AND (CASE WHEN e.review_status='confirmed_false_positive' THEN 'pass' ELSE e.decision END)=$%d", filter.Decision)
 	}
 	if filter.RiskLevel != "" {
-		add(" AND e.risk_level=$%d", filter.RiskLevel)
+		add(" AND (CASE WHEN e.review_status='confirmed_false_positive' THEN 'low' ELSE e.risk_level END)=$%d", filter.RiskLevel)
+	}
+	if filter.ReviewStatus != "" {
+		add(" AND e.review_status=$%d", filter.ReviewStatus)
 	}
 	if filter.Endpoint != "" {
 		add(" AND e.endpoint=$%d", filter.Endpoint)
@@ -317,7 +355,8 @@ func eventColumns(alias string) string {
 		%[1]s.stage,%[1]s.decision,%[1]s.risk_level,%[1]s.action,%[1]s.categories,%[1]s.matched_scanners,
 		%[1]s.scanner_scores,%[1]s.scanner_evidence,%[1]s.scanner_backend,%[1]s.scanner_version,
 		%[1]s.guard_endpoint_id,%[1]s.policy_id,%[1]s.policy_version,%[1]s.config_version,
-		%[1]s.chunk_total,%[1]s.latency_ms,%[1]s.created_at`, alias)
+		%[1]s.chunk_total,%[1]s.latency_ms,%[1]s.review_status,%[1]s.review_note,
+		%[1]s.reviewed_by,%[1]s.reviewed_at,%[1]s.created_at`, alias)
 }
 
 // eventDetailColumns adds the full prompt, which can be large, so it is only
@@ -328,7 +367,8 @@ func eventDetailColumns(alias string) string {
 
 func scanEvent(row rowScanner, withFullPrompt ...bool) (*Event, error) {
 	event := &Event{}
-	var userID, apiKeyID, groupID sql.NullInt64
+	var userID, apiKeyID, groupID, reviewedBy sql.NullInt64
+	var reviewedAt sql.NullTime
 	var categories, matched, scores, evidence []byte
 	dest := []any{&event.ID, &event.JobID, &event.Snapshot.RequestID, &userID,
 		&event.Snapshot.UsernameSnapshot, &event.Snapshot.UserEmailSnapshot, &apiKeyID,
@@ -337,7 +377,8 @@ func scanEvent(row rowScanner, withFullPrompt ...bool) (*Event, error) {
 		&event.Snapshot.PromptHash, &event.Snapshot.RedactedPreview, &event.Snapshot.Stage, &event.Decision,
 		&event.RiskLevel, &event.Action, &categories, &matched, &scores, &evidence, &event.ScannerBackend,
 		&event.ScannerVersion, &event.GuardEndpointID, &event.PolicyID, &event.PolicyVersion,
-		&event.ConfigVersion, &event.ChunkTotal, &event.LatencyMS, &event.CreatedAt}
+		&event.ConfigVersion, &event.ChunkTotal, &event.LatencyMS, &event.ReviewStatus, &event.ReviewNote,
+		&reviewedBy, &reviewedAt, &event.CreatedAt}
 	if len(withFullPrompt) > 0 && withFullPrompt[0] {
 		dest = append(dest, &event.Snapshot.FullPrompt)
 	}
@@ -348,6 +389,11 @@ func scanEvent(row rowScanner, withFullPrompt ...bool) (*Event, error) {
 	event.Snapshot.UserID = nullableInt64Value(userID)
 	event.Snapshot.APIKeyID = nullableInt64Value(apiKeyID)
 	event.Snapshot.GroupID = nullableInt64Ptr(groupID)
+	event.ReviewedBy = nullableInt64Ptr(reviewedBy)
+	if reviewedAt.Valid {
+		value := reviewedAt.Time
+		event.ReviewedAt = &value
+	}
 	_ = json.Unmarshal(categories, &event.Categories)
 	_ = json.Unmarshal(matched, &event.MatchedScanners)
 	_ = json.Unmarshal(scores, &event.ScannerScores)
@@ -356,6 +402,14 @@ func scanEvent(row rowScanner, withFullPrompt ...bool) (*Event, error) {
 		Categories: event.Categories, MatchedScanners: event.MatchedScanners, ScannerScores: event.ScannerScores,
 		ScannerEvidence: event.ScannerEvidence}
 	event.IssueSummaries = BuildIssueSummaries(result)
+	event.EffectiveDecision = event.Decision
+	event.EffectiveRiskLevel = event.RiskLevel
+	event.EffectiveAction = event.Action
+	if event.ReviewStatus == ReviewStatusFalsePositive {
+		event.EffectiveDecision = EventPass
+		event.EffectiveRiskLevel = RiskLow
+		event.EffectiveAction = ActionAllow
+	}
 	return event, nil
 }
 

@@ -43,7 +43,7 @@ func openPromptAuditIntegrationDB(t *testing.T) *sql.DB {
 		);
 	`)
 	require.NoError(t, err)
-	for _, name := range []string{"181_prompt_audit.sql", "182_prompt_audit_full_prompt.sql"} {
+	for _, name := range []string{"181_prompt_audit.sql", "182_prompt_audit_full_prompt.sql", "251_prompt_audit_review.sql"} {
 		migration, err := os.ReadFile(filepath.Join("..", "..", "migrations", name))
 		require.NoError(t, err)
 		// The migration runner can retry an interrupted deployment; the migration
@@ -341,6 +341,47 @@ func TestPromptAuditRepositoryForeignKeysFiltersAndStableIdentitySnapshots(t *te
 	require.NoError(t, err)
 	_, err = repo.GetEvent(ctx, event.ID)
 	require.ErrorIs(t, err, ErrEventNotFound)
+}
+
+func TestPromptAuditRepositoryReviewOverlayAndEffectiveFilters(t *testing.T) {
+	db := openPromptAuditIntegrationDB(t)
+	repo := NewPostgreSQLRepository(db)
+	ctx := context.Background()
+	adminID := insertIdentity(t, db, "users")
+	event, err := repo.RecordBlocking(ctx, integrationSnapshot("review"), 1, integrationResult(EventCritical), true)
+	require.NoError(t, err)
+	require.Equal(t, ReviewStatusUnreviewed, event.ReviewStatus)
+	require.Equal(t, EventCritical, event.EffectiveDecision)
+
+	reviewed, err := repo.ReviewEvents(ctx, []int64{event.ID}, ReviewStatusFalsePositive, "trusted Claude Code harness", adminID)
+	require.NoError(t, err)
+	require.Equal(t, int64(1), reviewed.Updated)
+
+	detail, err := repo.GetEvent(ctx, event.ID)
+	require.NoError(t, err)
+	require.Equal(t, EventCritical, detail.Decision, "raw scanner decision must remain unchanged")
+	require.Equal(t, EventPass, detail.EffectiveDecision)
+	require.Equal(t, RiskLow, detail.EffectiveRiskLevel)
+	require.Equal(t, ActionAllow, detail.EffectiveAction)
+	require.Equal(t, ReviewStatusFalsePositive, detail.ReviewStatus)
+	require.Equal(t, "trusted Claude Code harness", detail.ReviewNote)
+	require.NotNil(t, detail.ReviewedBy)
+	require.Equal(t, adminID, *detail.ReviewedBy)
+	require.NotNil(t, detail.ReviewedAt)
+
+	page, err := repo.ListEvents(ctx, EventFilter{Decision: string(EventPass), RiskLevel: string(RiskLow), ReviewStatus: string(ReviewStatusFalsePositive)}, 1, 10)
+	require.NoError(t, err)
+	require.Equal(t, int64(1), page.Total)
+	require.Len(t, page.Items, 1)
+
+	_, err = repo.ReviewEvents(ctx, []int64{event.ID}, ReviewStatusUnreviewed, "", adminID)
+	require.NoError(t, err)
+	detail, err = repo.GetEvent(ctx, event.ID)
+	require.NoError(t, err)
+	require.Equal(t, ReviewStatusUnreviewed, detail.ReviewStatus)
+	require.Equal(t, EventCritical, detail.EffectiveDecision)
+	require.Nil(t, detail.ReviewedBy)
+	require.Nil(t, detail.ReviewedAt)
 }
 
 func TestPromptAuditRepositoryHighWaterAndSafeDeletion(t *testing.T) {

@@ -6,6 +6,12 @@
         <p class="mt-1 text-sm text-gray-500 dark:text-dark-300">{{ t('admin.promptAudit.events.description') }}</p>
       </div>
       <div class="flex flex-wrap gap-2">
+        <button type="button" class="btn btn-secondary btn-sm" :disabled="selectedIds.length === 0" data-test="mark-false-positive" @click="$emit('review', 'confirmed_false_positive')">
+          {{ t('admin.promptAudit.events.markFalsePositive', { count: selectedIds.length }) }}
+        </button>
+        <button type="button" class="btn btn-ghost btn-sm" :disabled="selectedIds.length === 0" data-test="clear-review" @click="$emit('review', 'unreviewed')">
+          {{ t('admin.promptAudit.events.clearReview', { count: selectedIds.length }) }}
+        </button>
         <button type="button" class="btn btn-secondary btn-sm" :disabled="selectedIds.length === 0" @click="$emit('batch-delete')">
           {{ t('admin.promptAudit.events.deleteSelected', { count: selectedIds.length }) }}
         </button>
@@ -33,6 +39,14 @@
           <option value="medium">{{ t('admin.promptAudit.riskLevels.medium') }}</option>
           <option value="high">{{ t('admin.promptAudit.riskLevels.high') }}</option>
           <option value="critical">{{ t('admin.promptAudit.riskLevels.critical') }}</option>
+        </select>
+      </label>
+      <label class="text-xs text-gray-600 dark:text-dark-200">
+        <span>{{ t('admin.promptAudit.events.reviewStatus') }}</span>
+        <select v-model="localFilters.review_status" class="input mt-1 w-full" :aria-label="t('admin.promptAudit.events.reviewStatus')" @change="filtersChanged">
+          <option value="">{{ t('common.all') }}</option>
+          <option value="unreviewed">{{ t('admin.promptAudit.events.reviewStatuses.unreviewed') }}</option>
+          <option value="confirmed_false_positive">{{ t('admin.promptAudit.events.reviewStatuses.confirmed_false_positive') }}</option>
         </select>
       </label>
       <FilterInput v-model="localFilters.endpoint" :label="t('admin.promptAudit.events.endpoint')" @change="filtersChanged" />
@@ -87,7 +101,13 @@
               <p class="mt-1 text-xs text-gray-500">{{ event.snapshot.model }} · {{ event.snapshot.protocol }} · {{ event.snapshot.stage || 'http' }}</p>
             </td>
             <td class="px-3 py-3">
-              <span class="rounded-full px-2 py-0.5 text-xs font-medium" :class="decisionClass(event.decision)">{{ formatDecisionRisk(event.decision, event.risk_level) }}</span>
+              <span class="rounded-full px-2 py-0.5 text-xs font-medium" :class="decisionClass(resultDecision(event))">{{ formatDecisionRisk(resultDecision(event), resultRisk(event)) }}</span>
+              <span v-if="event.review_status === 'confirmed_false_positive'" class="ml-1 rounded-full bg-sky-100 px-2 py-0.5 text-xs font-medium text-sky-700 dark:bg-sky-950/50 dark:text-sky-300">
+                {{ t('admin.promptAudit.events.reviewStatuses.confirmed_false_positive') }}
+              </span>
+              <p v-if="event.review_status === 'confirmed_false_positive'" class="mt-1 text-xs text-gray-500 dark:text-dark-400">
+                {{ t('admin.promptAudit.events.originalResult', { decision: translateDecision(event.decision), risk: translateRiskLevel(event.risk_level) }) }}
+              </p>
               <p class="mt-2 max-w-48 truncate text-xs text-gray-500" :title="formatCategories(event.categories)">{{ formatCategories(event.categories) }}</p>
             </td>
             <td class="max-w-xs px-3 py-3"><p class="line-clamp-2 break-words text-gray-600 dark:text-dark-300">{{ event.snapshot.redacted_preview || '—' }}</p></td>
@@ -107,7 +127,7 @@
 import { computed, defineComponent, h, reactive, watch } from 'vue'
 import { useI18n } from 'vue-i18n'
 import Pagination from '@/components/common/Pagination.vue'
-import type { PromptAuditEvent, PromptEventFilters } from '../types'
+import type { PromptAuditEvent, PromptEventFilters, PromptReviewStatus } from '../types'
 import { cloneData, emptyEventFilters, SCANNER_CATALOG } from '../viewModel'
 
 const props = defineProps<{
@@ -122,6 +142,7 @@ const emit = defineEmits<{
   (event: 'page-size', value: number): void
   (event: 'view', id: number): void
   (event: 'delete', id: number): void
+  (event: 'review', status: PromptReviewStatus): void
   (event: 'batch-delete'): void
   (event: 'preview-delete'): void
 }>()
@@ -179,6 +200,12 @@ function toggleOne(id: number) {
 }
 function toggleAll() {
   emit('selection', allSelected.value ? [] : props.events.map((event) => event.id))
+}
+function resultDecision(event: PromptAuditEvent): string {
+  return event.effective_decision || event.decision
+}
+function resultRisk(event: PromptAuditEvent): string {
+  return event.effective_risk_level || event.risk_level
 }
 function formatDate(value: string): string {
   return new Intl.DateTimeFormat(locale.value, { dateStyle: 'short', timeStyle: 'medium' }).format(new Date(value))

@@ -86,7 +86,7 @@ describe('Prompt Audit components', () => {
 
   it('keeps identity fields separate, supports selection, and opens filter deletion from the toolbar', async () => {
     const event: PromptAuditEvent = {
-      id: 1, job_id: 1, decision: 'critical', risk_level: 'critical', action: 'Block', categories: ['pii'], matched_scanners: ['pii'], scanner_scores: { pii: 1 }, scanner_evidence: { pii: 'redacted' }, scanner_backend: 'qwen3guard-openai', scanner_version: '1', guard_endpoint_id: 'guard-1', policy_id: 'priority', policy_version: 1, config_version: 1, chunk_total: 1, latency_ms: 10, issue_summaries: [], created_at: '2026-07-16T00:00:00Z',
+      id: 1, job_id: 1, decision: 'critical', risk_level: 'critical', action: 'Block', categories: ['pii'], matched_scanners: ['pii'], scanner_scores: { pii: 1 }, scanner_evidence: { pii: 'redacted' }, scanner_backend: 'qwen3guard-openai', scanner_version: '1', guard_endpoint_id: 'guard-1', policy_id: 'priority', policy_version: 1, config_version: 1, chunk_total: 1, latency_ms: 10, issue_summaries: [], review_status: 'unreviewed', review_note: '', effective_decision: 'critical', effective_risk_level: 'critical', effective_action: 'Block', created_at: '2026-07-16T00:00:00Z',
       snapshot: { request_id: 'req-1', user_id: 1, username: 'alice', user_email: 'alice@example.test', api_key_id: 2, api_key_name: 'alice-key', group_id: 3, group_name: 'Alpha', provider: 'openai', endpoint: '/v1/chat/completions', protocol: 'openai_chat', model: 'gpt-test', prompt_hash: 'a'.repeat(64), redacted_preview: 'redacted preview', full_prompt: 'full prompt text', prompt_length: 10, message_count: 1, stage: 'http' },
     }
     const wrapper = mount(EventWorkspace, {
@@ -103,6 +103,35 @@ describe('Prompt Audit components', () => {
     expect(wrapper.emitted('preview-delete')).toHaveLength(1)
     await wrapper.get('[aria-label="admin.promptAudit.events.selectEvent"]').setValue(true)
     expect(wrapper.emitted('selection')?.at(-1)?.[0]).toEqual([1])
+  })
+
+  it('shows effective pass and original result for manually reviewed false positives', async () => {
+    const event: PromptAuditEvent = {
+      id: 3, job_id: 3, decision: 'critical', risk_level: 'critical', action: 'Block',
+      categories: ['jailbreak'], matched_scanners: ['jailbreak'], scanner_scores: { jailbreak: 0.5 }, scanner_evidence: { jailbreak: 'Jailbreak' },
+      scanner_backend: 'qwen3guard-openai', scanner_version: '1', guard_endpoint_id: 'guard-1',
+      policy_id: 'priority', policy_version: 1, config_version: 1, chunk_total: 2, latency_ms: 5,
+      issue_summaries: [], review_status: 'confirmed_false_positive', review_note: 'official Claude Code harness',
+      effective_decision: 'pass', effective_risk_level: 'low', effective_action: 'Allow', created_at: '2026-07-16T00:00:00Z',
+      snapshot: {
+        request_id: 'req-3', user_id: 1, username: 'bob', user_email: '', api_key_id: 2,
+        api_key_name: 'bob-key', group_id: 3, group_name: 'Alpha', provider: 'openai',
+        endpoint: '/v1/chat/completions', protocol: 'openai_chat', model: 'gpt-test',
+        prompt_hash: 'c'.repeat(64), redacted_preview: 'reviewed preview', full_prompt: 'reviewed prompt', prompt_length: 20,
+        message_count: 1, stage: 'http',
+      },
+    }
+    const wrapper = mount(EventWorkspace, {
+      props: { events: [event], total: 1, page: 1, pageSize: 20, filters: emptyEventFilters(), selectedIds: [3], loading: false, error: '' },
+      global: { stubs: { Pagination: PaginationStub } },
+    })
+    expect(wrapper.text()).toContain('admin.promptAudit.decisions.pass · admin.promptAudit.riskLevels.low')
+    expect(wrapper.text()).toContain('admin.promptAudit.events.reviewStatuses.confirmed_false_positive')
+    expect(wrapper.text()).toContain('admin.promptAudit.events.originalResult')
+    await wrapper.get('[data-test="mark-false-positive"]').trigger('click')
+    expect(wrapper.emitted('review')?.[0]?.[0]).toBe('confirmed_false_positive')
+    await wrapper.get('[data-test="clear-review"]').trigger('click')
+    expect(wrapper.emitted('review')?.[1]?.[0]).toBe('unreviewed')
   })
 
   it('resolves delete range presets to an epoch start and a cutoff end', () => {
@@ -216,6 +245,8 @@ describe('Prompt Audit components', () => {
         code: 'prompt_audit_sexual_content_or_sexual_acts', score: 1,
         evidence: 'Sexual Content or Sexual Acts', evidence_hash: 'abc',
       }],
+      review_status: 'unreviewed', review_note: '',
+      effective_decision: 'critical', effective_risk_level: 'critical', effective_action: 'Block',
       created_at: '2026-07-16T00:00:00Z',
       snapshot: {
         request_id: 'req-1', user_id: 1, username: 'alice', user_email: 'alice@example.test',
@@ -251,7 +282,7 @@ describe('Prompt Audit components', () => {
       categories: ['pii'], matched_scanners: ['pii'], scanner_scores: {}, scanner_evidence: {},
       scanner_backend: 'qwen3guard-openai', scanner_version: '1', guard_endpoint_id: 'guard-1',
       policy_id: 'priority', policy_version: 1, config_version: 1, chunk_total: 1, latency_ms: 5,
-      issue_summaries: [], created_at: '2026-07-16T00:00:00Z',
+      issue_summaries: [], review_status: 'unreviewed', review_note: '', effective_decision: 'flag', effective_risk_level: 'medium', effective_action: 'Warn', created_at: '2026-07-16T00:00:00Z',
       snapshot: {
         request_id: 'req-2', user_id: 1, username: 'bob', user_email: '', api_key_id: 2,
         api_key_name: 'bob-key', group_id: 3, group_name: 'Alpha', provider: 'openai',

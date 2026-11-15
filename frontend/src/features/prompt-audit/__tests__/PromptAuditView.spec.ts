@@ -7,7 +7,7 @@ import PromptAuditView from '../PromptAuditView.vue'
 
 const mocks = vi.hoisted(() => ({
   getConfig: vi.fn(), updateConfig: vi.fn(), probeEndpoint: vi.fn(), getRuntime: vi.fn(), listEvents: vi.fn(),
-  getEvent: vi.fn(), deleteEvent: vi.fn(), batchDeleteEvents: vi.fn(), previewDelete: vi.fn(), deleteEventsByFilter: vi.fn(), listGroups: vi.fn(),
+  getEvent: vi.fn(), reviewEvents: vi.fn(), deleteEvent: vi.fn(), batchDeleteEvents: vi.fn(), previewDelete: vi.fn(), deleteEventsByFilter: vi.fn(), listGroups: vi.fn(),
   showSuccess: vi.fn(), showError: vi.fn(),
 }))
 
@@ -41,8 +41,8 @@ const EndpointStub = defineComponent({
 const PolicyStub = defineComponent({ props: ['draft', 'groups'], emits: ['update:draft'], template: '<div data-test="policy" />' })
 const EventsStub = defineComponent({
   props: ['events', 'filters', 'selectedIds', 'loading', 'error', 'total', 'page', 'pageSize'],
-  emits: ['filters-change', 'search', 'selection', 'page', 'page-size', 'view', 'delete', 'batch-delete', 'preview-delete'],
-  template: '<div data-test="events"><button data-test="preview" @click="$emit(\'preview-delete\')">preview</button><button data-test="change-filter" @click="$emit(\'filters-change\', { ...filters, keyword: \'changed\' })">change</button><button data-test="delete-one" @click="$emit(\'delete\', 5)">delete</button><button data-test="select-batch" @click="$emit(\'selection\', [5, 6])">select</button><button data-test="delete-batch" @click="$emit(\'batch-delete\')">batch</button></div>',
+  emits: ['filters-change', 'search', 'selection', 'page', 'page-size', 'view', 'review', 'delete', 'batch-delete', 'preview-delete'],
+  template: '<div data-test="events"><button data-test="preview" @click="$emit(\'preview-delete\')">preview</button><button data-test="change-filter" @click="$emit(\'filters-change\', { ...filters, keyword: \'changed\' })">change</button><button data-test="delete-one" @click="$emit(\'delete\', 5)">delete</button><button data-test="select-batch" @click="$emit(\'selection\', [5, 6])">select</button><button data-test="mark-batch" @click="$emit(\'review\', \'confirmed_false_positive\')">mark</button><button data-test="clear-batch" @click="$emit(\'review\', \'unreviewed\')">clear</button><button data-test="delete-batch" @click="$emit(\'batch-delete\')">batch</button></div>',
 })
 const DetailStub = defineComponent({ props: ['show', 'event', 'loading'], emits: ['close'], template: '<div data-test="detail" />' })
 const ConfirmStub = defineComponent({ props: ['show', 'title', 'message'], emits: ['confirm', 'cancel'], template: '<div v-if="show" data-test="confirm"><button data-test="confirm-action" @click="$emit(\'confirm\')">confirm</button></div>' })
@@ -71,6 +71,7 @@ describe('PromptAuditView', () => {
     mocks.deleteEventsByFilter.mockResolvedValue({ deleted_events: 2, deleted_jobs: 2 })
     mocks.deleteEvent.mockResolvedValue({ deleted_events: 1, deleted_jobs: 1 })
     mocks.batchDeleteEvents.mockResolvedValue({ deleted_events: 2, deleted_jobs: 2 })
+    mocks.reviewEvents.mockResolvedValue({ updated: 2 })
   })
 
   it('starts config, runtime, groups, and events loads independently', async () => {
@@ -238,4 +239,20 @@ describe('PromptAuditView', () => {
     }))
     expect(wrapper.find('[data-test="filter-delete-dialog"]').exists()).toBe(false)
   })
+})
+
+it('marks selected false positives and clears review through the review API', async () => {
+  const wrapper = mountView()
+  await flushPromises()
+
+  await wrapper.get('[data-test="select-batch"]').trigger('click')
+  await wrapper.get('[data-test="mark-batch"]').trigger('click')
+  await flushPromises()
+  expect(mocks.reviewEvents).toHaveBeenCalledWith([5, 6], 'confirmed_false_positive')
+  expect(mocks.showSuccess).toHaveBeenCalled()
+
+  await wrapper.get('[data-test="select-batch"]').trigger('click')
+  await wrapper.get('[data-test="clear-batch"]').trigger('click')
+  await flushPromises()
+  expect(mocks.reviewEvents).toHaveBeenLastCalledWith([5, 6], 'unreviewed')
 })
