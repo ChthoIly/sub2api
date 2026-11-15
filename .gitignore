@@ -166,3 +166,25 @@ issues/
 .vite/
 # 本地闭源插件开发目录及构建产物不进入 Sub2API 仓库
 /plugins/
+
+# 本地运行数据与备份
+/data/
+/postgres_data/
+/redis_data/
+/backups/
+
+# 本地部署覆盖配置（确认仅本地使用时）
+/docker-compose.local.yml
+
+# 本地生成报告/图表
+/usage_activity_report_*.md
+/prompt_audit_review_*.md
+/ultra_daily_coverage_*.png
+/ultra_daily_coverage_*.svg
+# 本地构建/更新操作笔记
+/Update_Guide.md
+# 本地临时 Demo / 预览环境及其构建产物
+/.demo-*/
+/sub2api
+/backend/sub2api-*
+/.pnpm-store
