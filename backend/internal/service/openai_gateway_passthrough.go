@@ -751,8 +751,16 @@ func shouldFailoverOpenAIPassthroughResponse(account *Account, statusCode int, r
 	if isOpenAIRequestBodyTooLargeError(statusCode, "", responseBody) {
 		return true
 	}
-	if account != nil && account.IsPoolMode() && account.IsPoolModeRetryableStatus(statusCode) {
-		return true
+	if account != nil && account.IsPoolMode() {
+		if account.IsPoolModeRetryableStatus(statusCode) {
+			return true
+		}
+		// 401/403 是账号级认证/权限失败：即使 P3 已将 403 移出同账号重试列表，
+		// 也必须进入 failover 路径切到下一个账号，而不是直接把错误写回客户端。
+		switch statusCode {
+		case http.StatusUnauthorized, http.StatusForbidden:
+			return true
+		}
 	}
 	switch statusCode {
 	case http.StatusTooManyRequests, 529:

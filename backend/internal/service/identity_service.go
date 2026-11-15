@@ -362,7 +362,7 @@ func (s *IdentityService) ApplyFingerprint(req *http.Request, fp *Fingerprint) {
 //
 // 重要：此函数使用 json.RawMessage 保留其他字段的原始字节，
 // 避免重新序列化导致 thinking 块等内容被修改。
-func (s *IdentityService) RewriteUserID(body []byte, accountID int64, accountUUID, cachedClientID, fingerprintUA string) ([]byte, error) {
+func (s *IdentityService) RewriteUserID(body []byte, _ int64, accountUUID, cachedClientID, fingerprintUA string) ([]byte, error) {
 	if len(body) == 0 || accountUUID == "" || cachedClientID == "" {
 		return body, nil
 	}
@@ -392,8 +392,9 @@ func (s *IdentityService) RewriteUserID(body []byte, accountID int64, accountUUI
 
 	sessionTail := parsed.SessionID // 原始session UUID
 
-	// 生成新的session hash: SHA256(accountID::sessionTail) -> UUID格式
-	seed := fmt.Sprintf("%d::%s", accountID, sessionTail)
+	// P4: 生成新的 session hash 时不再混入 accountID，换号后 session 保持不变。
+	// 不同 org 的 session 空间互不可见；这里只使用稳定的原始 sessionTail。
+	seed := sessionTail
 	newSessionHash := generateUUIDFromSeed(seed)
 
 	// 根据客户端版本选择输出格式

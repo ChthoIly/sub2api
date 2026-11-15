@@ -403,6 +403,27 @@ func (s *GatewayService) Forward(ctx context.Context, c *gin.Context, account *A
 	if err := replaceBody(FilterThinkingBlocks(body, reqModel)); err != nil {
 		return nil, err
 	}
+	// P1: 该会话已在本账号撞过签名错误 -> 直接剥离历史 thinking 块再发送。
+	// 只清历史块，thinking 参数保持开启：新一轮仍会生成签名有效的新块。
+	if sessID := MetadataSessionID(body); IsSignatureDirty(account.ID, sessID) {
+		if err := replaceBody(StripAssistantThinkingBlocks(body)); err != nil {
+			return nil, err
+		}
+		logger.LegacyPrintf("service.gateway", "Account %d: stripped historical thinking (signature dirty)", account.ID)
+	}
+	// P2: claude-* 5.5 系不接受 assistant prefill，本地剥离，不要发出去。
+	// 不要对所有模型一刀切：旧版 Claude 和部分兼容上游可能支持 assistant prefill。
+	if isClaude55SignedThinkingModel(reqModel) {
+		if nb, dropped, empty := DropTrailingAssistantTurn(body); dropped {
+			if empty {
+				return nil, fmt.Errorf("upstream_precheck: conversation ends with assistant message (prefill unsupported)")
+			}
+			if err := replaceBody(nb); err != nil {
+				return nil, err
+			}
+			logger.LegacyPrintf("service.gateway", "Account %d: dropped trailing assistant turn (prefill precheck)", account.ID)
+		}
+	}
 	// Chinese LLM thinking.type 协议差异补正（如 MiniMax 只接受 adaptive；Anthropic-SDK
 	// 客户端默认发 enabled）。仅对 passback-required 上游生效（claude-* 不会进来）。
 	if ResolveThinkingProtocol(reqModel) == ThinkingProtocolPassbackRequired {
@@ -476,6 +497,10 @@ func (s *GatewayService) Forward(ctx context.Context, c *gin.Context, account *A
 							return ""
 						}(),
 					})
+
+					// P1: 标记该会话在本账号已签名污染，后续请求直接剥离历史 thinking，
+					// 不再每次都先撞一次 400（上游只看得到一次失败）。
+					MarkSignatureDirty(account.ID, MetadataSessionID(body))
 
 					looksLikeToolSignatureError := func(msg string) bool {
 						m := strings.ToLower(msg)

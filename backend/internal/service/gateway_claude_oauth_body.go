@@ -342,14 +342,14 @@ func (s *GatewayService) buildOAuthMetadataUserID(parsed *ParsedRequest, account
 		userID = generateClientID()
 	}
 
-	// session_id 用"会话级稳定种子"派生（账号 + 客户端区分因子 + 首条 user 文本）：
+	// session_id 用"会话级稳定种子"派生（客户端区分因子 + 首条 user 文本）：
 	// 随对话在尾部追加 messages 时保持不变，贴近真实 CC 进程级稳定的 session_id。
 	// 不复用 GenerateSessionHash —— 后者是粘性路由键、按设计逐轮变化（见其测试）。
 	var firstUserText string
 	if parsed.Body != nil {
 		firstUserText = extractFirstUserText(parsed.Body.Bytes())
 	}
-	seed := buildStableSessionSeed(account.ID, sessionContextDiscriminator(parsed.SessionContext), firstUserText)
+	seed := buildStableSessionSeed(sessionContextDiscriminator(parsed.SessionContext), firstUserText)
 	sessionID := generateSessionUUID(seed)
 
 	// 根据指纹 UA 版本选择输出格式
@@ -471,7 +471,7 @@ func (s *GatewayService) buildOAuthMetadataUserIDFromBody(
 	if fp != nil {
 		clientDiscriminator = fp.ClientID
 	}
-	seed := buildStableSessionSeed(account.ID, clientDiscriminator, extractFirstUserText(body))
+	seed := buildStableSessionSeed(clientDiscriminator, extractFirstUserText(body))
 	sessionID := generateSessionUUID(seed)
 
 	var uaVersion string
@@ -485,15 +485,19 @@ func (s *GatewayService) buildOAuthMetadataUserIDFromBody(
 // buildStableSessionSeed 为伪装路径合成的 metadata.user_id session_id 生成"会话级稳定"种子。
 //
 // 真实 Claude Code 的 session_id 是进程级随机 UUID，在一段会话内跨请求保持不变。无状态代理
-// 无法恢复该值，这里用"会话内不变的锚点"近似：账号 ID + 客户端区分因子 + 首条 user 消息文本。
-// 对话在尾部追加 messages 时这三者都不变，因此 generateSessionUUID(seed) 跨轮稳定。
+// 无法恢复该值，这里用"会话内不变的锚点"近似：客户端区分因子 + 首条 user 消息文本。
+// 对话在尾部追加 messages 时这两个锚点都不变，因此 generateSessionUUID(seed) 跨轮稳定。
 //
 // 注意：粘性路由键 GenerateSessionHash 按设计逐轮变化（见其测试），本函数与之独立、互不影响。
-// accountID 恒存在，故 seed 永不为空 —— 输出始终是确定性 UUID，而非随机值。
-func buildStableSessionSeed(accountID int64, clientDiscriminator, firstUserText string) string {
+//
+// P4: 不要把 accountID 掺进 seed —— 换号不应改变上游会话身份，否则同一对话会
+// 中途换 session，thinking 签名上下文失效，放大 400。
+func buildStableSessionSeed(clientDiscriminator, firstUserText string) string {
+	// generateSessionUUID("") 会退化为随机 UUID；这里保证无锚点时仍返回稳定非空值。
+	if clientDiscriminator == "" && firstUserText == "" {
+		return "empty-session-seed"
+	}
 	var b strings.Builder
-	_, _ = b.WriteString(strconv.FormatInt(accountID, 10))
-	_, _ = b.WriteString("::")
 	_, _ = b.WriteString(clientDiscriminator)
 	_, _ = b.WriteString("::")
 	_, _ = b.WriteString(firstUserText)

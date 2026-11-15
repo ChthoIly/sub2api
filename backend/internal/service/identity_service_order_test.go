@@ -6,6 +6,7 @@ import (
 	"testing"
 
 	"github.com/stretchr/testify/require"
+	"github.com/tidwall/gjson"
 )
 
 type identityCacheStub struct {
@@ -79,4 +80,30 @@ func TestIdentityService_RewriteUserIDWithMasking_PreservesTopLevelFieldOrder(t 
 
 func strconvQuote(v string) string {
 	return `"` + strings.ReplaceAll(strings.ReplaceAll(v, `\`, `\\`), `"`, `\"`) + `"`
+}
+
+func TestIdentityService_RewriteUserID_SessionStableAcrossAccounts(t *testing.T) {
+	cache := &identityCacheStub{}
+	svc := NewIdentityService(cache)
+
+	const sessionID = "7578cf37-aaca-46e4-a45c-71285d9dbb83"
+	originalUserID := FormatMetadataUserID(
+		"d61f76d0730d2b920763648949bad5c79742155c27037fc77ac3f9805cb90169",
+		"",
+		sessionID,
+		"2.1.78",
+	)
+	body := []byte(`{"metadata":{"user_id":` + strconvQuote(originalUserID) + `}}`)
+
+	rewrite := func(accountID int64) string {
+		result, err := svc.RewriteUserID(body, accountID, "acc-uuid", "client-xyz", "claude-cli/2.1.78 (external, cli)")
+		require.NoError(t, err)
+		return gjson.GetBytes(result, "metadata.user_id").String()
+	}
+
+	first := ParseMetadataUserID(rewrite(111))
+	second := ParseMetadataUserID(rewrite(222))
+	require.NotNil(t, first)
+	require.NotNil(t, second)
+	require.Equal(t, first.SessionID, second.SessionID)
 }

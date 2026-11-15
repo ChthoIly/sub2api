@@ -138,12 +138,28 @@ func TestIsPoolModeRetryableStatus_Account(t *testing.T) {
 			expected:   false,
 		},
 		{
-			name: "unconfigured_uses_default_403",
+			name: "unconfigured_uses_default_401",
+			account: &Account{
+				Credentials: map[string]any{"pool_mode": true},
+			},
+			statusCode: 401,
+			expected:   true,
+		},
+		{
+			name: "unconfigured_uses_default_429",
+			account: &Account{
+				Credentials: map[string]any{"pool_mode": true},
+			},
+			statusCode: 429,
+			expected:   true,
+		},
+		{
+			name: "unconfigured_403_is_not_retried",
 			account: &Account{
 				Credentials: map[string]any{"pool_mode": true},
 			},
 			statusCode: 403,
-			expected:   true,
+			expected:   false,
 		},
 		{
 			name: "unconfigured_uses_default_502_false",

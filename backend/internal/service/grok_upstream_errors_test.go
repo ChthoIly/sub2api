@@ -362,7 +362,10 @@ func TestHandleGrokAccountUpstreamErrorDefaultCooldownsRespectPoolMode(t *testin
 	}
 
 	account := &Account{Type: AccountTypeAPIKey, Credentials: map[string]any{"pool_mode": true}}
-	require.True(t, account.IsPoolModeRetryableStatus(http.StatusForbidden))
+	// 403 不再默认同账号重试，但仍走 failover。
+	require.False(t, account.IsPoolModeRetryableStatus(http.StatusForbidden))
+	require.True(t, account.IsPoolModeRetryableStatus(http.StatusUnauthorized))
+	require.True(t, account.IsPoolModeRetryableStatus(http.StatusTooManyRequests))
 
 	t.Run("explicit temporary rule still applies", func(t *testing.T) {
 		repo := &grokQuotaAccountRepo{}

@@ -1860,9 +1860,10 @@ func TestOpenAIGatewayService_APIKeyPassthrough_PoolModeConfigured5xxRetriesSame
 func TestOpenAIGatewayService_APIKeyPassthrough_PoolModeAuthErrorsTriggerFailover(t *testing.T) {
 	gin.SetMode(gin.TestMode)
 	tests := []struct {
-		name        string
-		statusCode  int
-		credentials map[string]any
+		name                   string
+		statusCode             int
+		credentials            map[string]any
+		retryableOnSameAccount bool
 	}{
 		{
 			name:       "configured_401",
@@ -1870,11 +1871,13 @@ func TestOpenAIGatewayService_APIKeyPassthrough_PoolModeAuthErrorsTriggerFailove
 			credentials: map[string]any{
 				"pool_mode_retry_status_codes": []any{float64(http.StatusUnauthorized)},
 			},
+			retryableOnSameAccount: true,
 		},
 		{
-			name:        "default_403",
-			statusCode:  http.StatusForbidden,
-			credentials: map[string]any{},
+			name:                   "default_403_failover_without_same_account_retry",
+			statusCode:             http.StatusForbidden,
+			credentials:            map[string]any{},
+			retryableOnSameAccount: false,
 		},
 	}
 
@@ -1913,7 +1916,7 @@ func TestOpenAIGatewayService_APIKeyPassthrough_PoolModeAuthErrorsTriggerFailove
 			var failoverErr *UpstreamFailoverError
 			require.ErrorAs(t, err, &failoverErr)
 			require.Equal(t, tt.statusCode, failoverErr.StatusCode)
-			require.True(t, failoverErr.RetryableOnSameAccount)
+			require.Equal(t, tt.retryableOnSameAccount, failoverErr.RetryableOnSameAccount)
 			require.False(t, c.Writer.Written(), "pool-mode auth failure must fail over before committing a response")
 			require.False(t, IsResponseCommitted(c))
 		})

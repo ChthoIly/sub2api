@@ -1303,7 +1303,9 @@ func parsePoolModeRetryCount(value any) int {
 
 // defaultPoolModeRetryableStatusCodes 池模式下默认触发同账号重试的状态码。
 // 未在 Account.Credentials 中显式配置 pool_mode_retry_status_codes 时使用。
-var defaultPoolModeRetryableStatusCodes = []int{401, 403, 429}
+// P3: 403 表示权限/组织状态（如 org 被关闭），重试无意义，只会放大违规请求数。
+// 移出列表后：403 不再同账号重试，直接 failover 到下一个账号。
+var defaultPoolModeRetryableStatusCodes = []int{401, 429}
 
 // isPoolModeRetryableStatus 池模式下应触发同账号重试的状态码（默认列表）。
 func isPoolModeRetryableStatus(statusCode int) bool {
@@ -1318,7 +1320,7 @@ func isPoolModeRetryableStatus(statusCode int) bool {
 // GetPoolModeRetryStatusCodes 返回账号自定义的池模式同账号重试状态码列表。
 //
 // 返回值语义：
-//   - nil：未配置 → 调用方应回退到默认值 [401, 403, 429]
+//   - nil：未配置 → 调用方应回退到默认值 [401, 429]
 //   - 长度为 0 的切片：管理员显式置空 → 关闭按状态码触发的同账号重试
 //   - 非空切片：去重、过滤为合法 HTTP 状态码（100-599）后的覆盖列表
 func (a *Account) GetPoolModeRetryStatusCodes() []int {
