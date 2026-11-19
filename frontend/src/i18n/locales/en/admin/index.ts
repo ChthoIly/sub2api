@@ -8,6 +8,7 @@ import audit from './audit'
 import promptAudit from './promptAudit'
 import activityMonitor from './activityMonitor'
 import plugins from './plugins'
+import subscriptionLimits from './subscriptionLimits'
 
 export default {
   ...overview,
@@ -20,4 +21,5 @@ export default {
   ...promptAudit,
   ...activityMonitor,
   ...plugins,
+  ...subscriptionLimits,
 }

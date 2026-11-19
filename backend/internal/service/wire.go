@@ -501,6 +501,16 @@ func ProvideSchedulerSnapshotService(
 	return svc
 }
 
+// ProvideClaudeSubscriptionLimitService creates the passive Claude
+// usage-window driven subscription-limit service.
+func ProvideClaudeSubscriptionLimitService(
+	repo ClaudeSubscriptionLimitRepository,
+	usageRepo UsageLogRepository,
+	invalidator APIKeyAuthCacheInvalidator,
+) *ClaudeSubscriptionLimitService {
+	return NewClaudeSubscriptionLimitService(repo, usageRepo, invalidator)
+}
+
 // ProvideRateLimitService creates RateLimitService with optional dependencies.
 func ProvideRateLimitService(
 	accountRepo AccountRepository,
@@ -513,6 +523,7 @@ func ProvideRateLimitService(
 	settingService *SettingService,
 	tokenCacheInvalidator TokenCacheInvalidator,
 	ollamaCloudUsage *OllamaCloudUsageService,
+	claudeSubscriptionLimit *ClaudeSubscriptionLimitService,
 ) *RateLimitService {
 	svc := NewRateLimitService(accountRepo, usageRepo, cfg, geminiQuotaService, tempUnschedCache)
 	if healthCache, ok := tempUnschedCache.(OpenAIAPIKeyHealthCache); ok {
@@ -523,6 +534,7 @@ func ProvideRateLimitService(
 	svc.SetSettingService(settingService)
 	svc.SetTokenCacheInvalidator(tokenCacheInvalidator)
 	svc.SetOllamaCloudUsageProbeScheduler(ollamaCloudUsage)
+	svc.SetClaudeSubscriptionLimitObserver(claudeSubscriptionLimit)
 	return svc
 }
 
@@ -918,6 +930,7 @@ var ProviderSet = wire.NewSet(
 	ProvideClaudeTokenProvider,
 	NewAntigravityGatewayService,
 	ProvideRateLimitService,
+	ProvideClaudeSubscriptionLimitService,
 	ProvideAccountUsageService,
 	ProvideAccountTestService,
 	ProvideUpstreamBillingProbeService,

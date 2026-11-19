@@ -181,6 +181,7 @@ export default {
     availableChannels: 'Available Channels',
     modelPlaza: 'Model Plaza',
     subscriptions: 'Subscriptions',
+    subscriptionLimits: 'Claude Dynamic Limits',
     accounts: 'Accounts',
     plugins: 'Plugins',
     proxies: 'Proxies',

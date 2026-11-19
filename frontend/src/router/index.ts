@@ -549,6 +549,18 @@ const routes: RouteRecordRaw[] = [
     }
   },
   {
+    path: '/admin/claude-subscription-limits',
+    name: 'AdminClaudeSubscriptionLimits',
+    component: () => import('@/views/admin/ClaudeSubscriptionLimitsView.vue'),
+    meta: {
+      requiresAuth: true,
+      requiresAdmin: true,
+      title: 'Claude Subscription Dynamic Limits',
+      titleKey: 'admin.subscriptionLimits.title',
+      descriptionKey: 'admin.subscriptionLimits.description'
+    }
+  },
+  {
     path: '/admin/accounts',
     name: 'AdminAccounts',
     component: () => import('@/views/admin/AccountsView.vue'),

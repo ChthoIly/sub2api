@@ -31,6 +31,7 @@ type RateLimitService struct {
 	settingService        *SettingService
 	tokenCacheInvalidator TokenCacheInvalidator
 	runtimeBlocker        AccountRuntimeBlocker
+	claudeLimitObserver   ClaudeSubscriptionPassiveUsageObserver
 	// ollamaCloudUsageProbe is the optional Ollama Cloud usage probe scheduler
 	// injected via SetOllamaCloudUsageProbeScheduler. See
 	// ratelimit_service_ollama_429.go for how real-Ollama 429s schedule an async
@@ -134,6 +135,12 @@ func (s *RateLimitService) SetTokenCacheInvalidator(invalidator TokenCacheInvali
 
 func (s *RateLimitService) SetAccountRuntimeBlocker(blocker AccountRuntimeBlocker) {
 	s.runtimeBlocker = blocker
+}
+
+// SetClaudeSubscriptionLimitObserver attaches the passive Claude usage-window
+// observer used by the dynamic subscription-limit feature.
+func (s *RateLimitService) SetClaudeSubscriptionLimitObserver(observer ClaudeSubscriptionPassiveUsageObserver) {
+	s.claudeLimitObserver = observer
 }
 
 func (s *RateLimitService) IsOpenAIAdvancedSchedulerStickyWeightedEnabled(ctx context.Context) bool {
@@ -2247,6 +2254,9 @@ func (s *RateLimitService) samplePassiveUsageFromHeaders(ctx context.Context, ac
 		extraUpdates["passive_usage_sampled_at"] = time.Now().UTC().Format(time.RFC3339)
 		if err := s.accountRepo.UpdateExtra(ctx, account.ID, extraUpdates); err != nil {
 			slog.Warn("passive_usage_update_failed", "account_id", account.ID, "error", err)
+		}
+		if s.claudeLimitObserver != nil && account.IsAnthropicOAuthOrSetupToken() {
+			s.claudeLimitObserver.ObservePassiveUsage(ctx, account, headers, extraUpdates)
 		}
 	}
 

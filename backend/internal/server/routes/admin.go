@@ -93,6 +93,9 @@ func RegisterAdminRoutes(
 		// 订阅管理
 		registerSubscriptionRoutes(admin, h)
 
+		// Claude 订阅分组动态限额
+		registerClaudeSubscriptionLimitRoutes(admin, h)
+
 		// 使用记录管理
 		registerUsageRoutes(admin, h)
 
@@ -907,5 +910,15 @@ func channelMonitorModeV2Guard(settingService *service.SettingService) gin.Handl
 			return
 		}
 		c.Next()
+	}
+}
+
+func registerClaudeSubscriptionLimitRoutes(admin *gin.RouterGroup, h *handler.Handlers) {
+	limits := admin.Group("/claude-subscription-limits")
+	{
+		limits.GET("", h.Admin.ClaudeSubscriptionLimit.GetOverview)
+		limits.PUT("/groups/:id", h.Admin.ClaudeSubscriptionLimit.UpdateGroupConfig)
+		limits.GET("/history/estimates", h.Admin.ClaudeSubscriptionLimit.ListQuotaEstimates)
+		limits.GET("/history/adjustments", h.Admin.ClaudeSubscriptionLimit.ListLimitAdjustments)
 	}
 }
