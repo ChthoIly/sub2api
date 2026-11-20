@@ -47,7 +47,7 @@ export function createDefaultEndpoint(index = 1): PromptAuditEndpointDraft {
     protocol: 'openai_compatible',
     base_url: 'http://127.0.0.1:8000',
     model: DEFAULT_GUARD_MODEL,
-    timeout_ms: 3000,
+    timeout_ms: 30000,
     input_limit: 4000,
     enabled: true,
     has_token: false,

@@ -449,6 +449,38 @@ func TestWorkerRetryBackoffTerminalFailureAndFailover(t *testing.T) {
 	require.Equal(t, int64(1), metrics.Snapshot().Failovers)
 }
 
+func TestWorkerClearsStaleRuntimeErrorAfterSuccessfulJob(t *testing.T) {
+	repo := &fakeJobRepository{}
+	payload := &fakePayloadStore{values: map[int64]string{51: "abcdef"}}
+	runner := NewRunner(&fakeConfigStore{cfg: asyncConfig(), active: true}, repo, payload,
+		PromptScannerFunc(func(context.Context, ActiveEndpoint, string, []string) (*NormalizedResult, error) {
+			return integrationResult(EventPass), nil
+		}), NewAtomicMetrics())
+	runner.setLastError(ErrorCodeUnavailable, "previous failure")
+	runner.processSafely(context.Background(), 0, asyncConfig(), workerJob(1, 3))
+	_, processed, failed, _, _, code, message := runner.Snapshot()
+	require.Equal(t, int64(1), processed)
+	require.Zero(t, failed)
+	require.Empty(t, code)
+	require.Empty(t, message)
+}
+
+func TestAsyncScanRetriesColdStartTimeoutWithMaximumTimeout(t *testing.T) {
+	timeouts := []int{}
+	scanner := PromptScannerFunc(func(_ context.Context, endpoint ActiveEndpoint, _ string, _ []string) (*NormalizedResult, error) {
+		timeouts = append(timeouts, endpoint.TimeoutMS)
+		if len(timeouts) == 1 {
+			return nil, &GuardError{Code: ErrorCodeUnavailable, Retryable: true, Timeout: true}
+		}
+		return integrationResult(EventPass), nil
+	})
+	result, err := scanWithFailover(context.Background(), scanner, AllScannerIDs,
+		[]ActiveEndpoint{{ID: "guard", Enabled: true, TimeoutMS: 1000, InputLimit: 10}}, "hello", nil)
+	require.NoError(t, err)
+	require.Equal(t, EventPass, result.Decision)
+	require.Equal(t, []int{1000, MaxTimeoutMS}, timeouts)
+}
+
 func TestWorkerPanicLeaseLossAndLifecycleAreContained(t *testing.T) {
 	t.Run("panic", func(t *testing.T) {
 		repo := &fakeJobRepository{}

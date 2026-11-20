@@ -4,8 +4,6 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
-	"io"
-	"net"
 	"net/http"
 	"strings"
 	"sync"
@@ -251,80 +249,34 @@ func (s *PromptService) Probe(ctx context.Context, request ProbeRequest) ProbeRe
 	if err != nil {
 		return s.finishProbe(request.Endpoint.ID, started, ProbeResult{Status: "failed", ErrorCode: "endpoint_invalid", Message: "审计节点配置无效"})
 	}
+	if s.scanner == nil {
+		return s.finishProbe(endpoint.ID, started, ProbeResult{Status: "failed", ErrorCode: ErrorCodeUnavailable, Message: "审计节点模型调用失败", TokenApplied: tokenApplied})
+	}
 	LogInfo(EventProbeStarted, map[string]any{"guard_endpoint_id": endpoint.ID, "status": "started"})
-	client, err := NewSecureHTTPClient(endpoint)
-	if err != nil {
-		return s.finishProbe(endpoint.ID, started, ProbeResult{Status: "failed", ErrorCode: "endpoint_unsafe", Message: "审计节点地址不在允许范围", TokenApplied: tokenApplied})
+	// A model listing is not enough: /v1/models can answer while the actual
+	// inference path is unusable. Probe the same chat completions call that
+	// production audits use so the admin sees the true health of the node.
+	result, scanErr := s.scanner.Scan(ctx, endpoint, "Hello", AllScannerIDs)
+	if scanErr == nil && result != nil {
+		return s.finishProbe(endpoint.ID, started, ProbeResult{OK: true, Status: "healthy", Message: "审计节点模型调用正常", HTTPStatus: http.StatusOK, TokenApplied: tokenApplied})
 	}
-	modelsURL, _ := ModelsURL(endpoint.BaseURL)
-	req, err := http.NewRequestWithContext(ctx, http.MethodGet, modelsURL, nil)
-	if err != nil {
-		return s.finishProbe(endpoint.ID, started, ProbeResult{Status: "failed", ErrorCode: "probe_request_invalid", Message: "无法创建探测请求", TokenApplied: tokenApplied})
+	code, status, retryable := guardErrorCode(scanErr), 0, false
+	timedOut := false
+	var guardErr *GuardError
+	if errors.As(scanErr, &guardErr) {
+		status, retryable, timedOut = guardErr.HTTPStatus, guardErr.Retryable, guardErr.Timeout
 	}
-	if endpoint.Token != "" {
-		req.Header.Set("Authorization", "Bearer "+endpoint.Token)
+	if code == "" {
+		code = ErrorCodeInvalidResponse
 	}
-	resp, err := client.Do(req)
-	if err != nil {
-		code := "connection_failed"
-		var netErr net.Error
-		if errors.Is(err, context.DeadlineExceeded) || (errors.As(err, &netErr) && netErr.Timeout()) {
-			code = "timeout"
-		}
-		return s.finishProbe(endpoint.ID, started, ProbeResult{Status: "failed", ErrorCode: code, Message: "无法连接审计节点", Retryable: true, TokenApplied: tokenApplied})
+	message := "审计节点模型调用失败"
+	switch {
+	case timedOut:
+		message = "审计节点模型调用超时，请提高节点总超时或先预加载模型"
+	case code == ErrorCodeInvalidResponse:
+		message = "审计节点模型返回格式无效"
 	}
-	responseBody, readErr := io.ReadAll(io.LimitReader(resp.Body, maxGuardResponseBytes+1))
-	_ = resp.Body.Close()
-	if readErr != nil {
-		return s.finishProbe(endpoint.ID, started, ProbeResult{Status: "failed", ErrorCode: "response_read_failed", Message: "审计节点响应读取失败", HTTPStatus: resp.StatusCode, Retryable: true, TokenApplied: tokenApplied})
-	}
-	if int64(len(responseBody)) > maxGuardResponseBytes {
-		return s.finishProbe(endpoint.ID, started, ProbeResult{Status: "failed", ErrorCode: "response_too_large", Message: "审计节点响应无效", HTTPStatus: resp.StatusCode, TokenApplied: tokenApplied})
-	}
-	if resp.StatusCode >= 200 && resp.StatusCode < 300 && modelsResponseReady(responseBody, endpoint.Model) {
-		return s.finishProbe(endpoint.ID, started, ProbeResult{OK: true, Status: "healthy", Message: "审计节点连接正常", HTTPStatus: resp.StatusCode, TokenApplied: tokenApplied})
-	}
-	if (resp.StatusCode >= 200 && resp.StatusCode < 300) || resp.StatusCode == http.StatusNotFound || resp.StatusCode == http.StatusMethodNotAllowed {
-		result, scanErr := s.scanner.Scan(ctx, endpoint, "Hello", AllScannerIDs)
-		if scanErr == nil && result != nil {
-			return s.finishProbe(endpoint.ID, started, ProbeResult{OK: true, Status: "healthy", Message: "审计节点模型调用正常", HTTPStatus: http.StatusOK, TokenApplied: tokenApplied})
-		}
-		code, status, retryable := guardErrorCode(scanErr), 0, false
-		var guardErr *GuardError
-		if errors.As(scanErr, &guardErr) {
-			status, retryable = guardErr.HTTPStatus, guardErr.Retryable
-		}
-		if code == "" {
-			code = ErrorCodeInvalidResponse
-		}
-		return s.finishProbe(endpoint.ID, started, ProbeResult{Status: "failed", ErrorCode: code, Message: "审计节点模型调用失败", HTTPStatus: status, Retryable: retryable, TokenApplied: tokenApplied})
-	}
-	code, retryable := "probe_http_error", resp.StatusCode == 429 || resp.StatusCode >= 500
-	if resp.StatusCode == 401 || resp.StatusCode == 403 {
-		code = "authentication_failed"
-	}
-	return s.finishProbe(endpoint.ID, started, ProbeResult{Status: "failed", ErrorCode: code, Message: "审计节点探测失败", HTTPStatus: resp.StatusCode, Retryable: retryable, TokenApplied: tokenApplied})
-}
-
-func modelsResponseReady(body []byte, model string) bool {
-	var response struct {
-		Data []struct {
-			ID string `json:"id"`
-		} `json:"data"`
-	}
-	if json.Unmarshal(body, &response) != nil || response.Data == nil {
-		return false
-	}
-	model = strings.TrimSpace(model)
-	if model == "" {
-		return true
-	}
-	for _, item := range response.Data {
-		if strings.TrimSpace(item.ID) == model {
-			return true
-		}
-	}
-	return false
+	return s.finishProbe(endpoint.ID, started, ProbeResult{Status: "failed", ErrorCode: code, Message: message, HTTPStatus: status, Retryable: retryable, TokenApplied: tokenApplied})
 }
 
 func (s *PromptService) resolveProbeEndpoint(input UpdateEndpoint) (ActiveEndpoint, bool, error) {

@@ -121,7 +121,7 @@ func TestOpenAICompatibleScannerClassifiesHTTPConnectionAndTimeoutFailures(t *te
 	require.True(t, connectionErr.Retryable)
 
 	timeout := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
-		time.Sleep(100 * time.Millisecond)
+		time.Sleep(300 * time.Millisecond)
 		w.WriteHeader(http.StatusOK)
 	}))
 	defer timeout.Close()
@@ -132,47 +132,26 @@ func TestOpenAICompatibleScannerClassifiesHTTPConnectionAndTimeoutFailures(t *te
 	require.True(t, timeoutErr.Timeout)
 }
 
-func TestPromptAuditProbeModelsFallbackAndResponseSafety(t *testing.T) {
-	t.Run("models contains configured model", func(t *testing.T) {
+func TestPromptAuditProbeUsesRealModelInferenceAndResponseSafety(t *testing.T) {
+	t.Run("healthy model inference", func(t *testing.T) {
 		var chatCalls atomic.Int64
 		server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			require.Equal(t, http.MethodPost, r.Method)
+			require.Equal(t, "/v1/chat/completions", r.URL.Path)
 			require.Equal(t, "Bearer temporary-token", r.Header.Get("Authorization"))
-			if r.URL.Path == "/v1/models" {
-				_, _ = w.Write([]byte(`{"data":[{"id":"` + DefaultGuardModel + `"}]}`))
-				return
-			}
-			chatCalls.Add(1)
-		}))
-		defer server.Close()
-		result := newProbeTestService().Probe(context.Background(), ProbeRequest{Endpoint: probeEndpoint(server.URL, "temporary-token")})
-		require.True(t, result.OK)
-		require.True(t, result.TokenApplied)
-		require.Equal(t, http.StatusOK, result.HTTPStatus)
-		require.Zero(t, chatCalls.Load())
-	})
-
-	t.Run("invalid models response performs real guard fallback", func(t *testing.T) {
-		var chatCalls atomic.Int64
-		server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-			if r.URL.Path == "/v1/models" {
-				_, _ = w.Write([]byte(`{"unexpected":true}`))
-				return
-			}
 			chatCalls.Add(1)
 			_, _ = w.Write([]byte(`{"choices":[{"message":{"content":"Safety: Safe\nCategories: None"}}]}`))
 		}))
 		defer server.Close()
 		result := newProbeTestService().Probe(context.Background(), ProbeRequest{Endpoint: probeEndpoint(server.URL, "temporary-token")})
 		require.True(t, result.OK)
+		require.True(t, result.TokenApplied)
+		require.Equal(t, http.StatusOK, result.HTTPStatus)
 		require.Equal(t, int64(1), chatCalls.Load())
 	})
 
-	t.Run("fallback authentication failure is stable", func(t *testing.T) {
-		server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-			if r.URL.Path == "/v1/models" {
-				w.WriteHeader(http.StatusNotFound)
-				return
-			}
+	t.Run("authentication failure is stable", func(t *testing.T) {
+		server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 			w.WriteHeader(http.StatusUnauthorized)
 		}))
 		defer server.Close()
@@ -183,19 +162,30 @@ func TestPromptAuditProbeModelsFallbackAndResponseSafety(t *testing.T) {
 		require.False(t, result.Retryable)
 	})
 
-	t.Run("oversized models response is rejected without fallback", func(t *testing.T) {
-		var chatCalls atomic.Int64
-		server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-			if r.URL.Path != "/v1/models" {
-				chatCalls.Add(1)
-			}
+	t.Run("oversized model response is rejected", func(t *testing.T) {
+		server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 			_, _ = w.Write([]byte(strings.Repeat("x", int(maxGuardResponseBytes)+1)))
 		}))
 		defer server.Close()
 		result := newProbeTestService().Probe(context.Background(), ProbeRequest{Endpoint: probeEndpoint(server.URL, "temporary-token")})
 		require.False(t, result.OK)
-		require.Equal(t, "response_too_large", result.ErrorCode)
-		require.Zero(t, chatCalls.Load())
+		require.Equal(t, ErrorCodeInvalidResponse, result.ErrorCode)
+		require.Contains(t, result.Message, "格式无效")
+	})
+
+	t.Run("timeout message is actionable", func(t *testing.T) {
+		server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+			time.Sleep(300 * time.Millisecond)
+			_, _ = w.Write([]byte(`{"choices":[{"message":{"content":"Safety: Safe\nCategories: None"}}]}`))
+		}))
+		defer server.Close()
+		endpoint := probeEndpoint(server.URL, "temporary-token")
+		endpoint.TimeoutMS = 100
+		result := newProbeTestService().Probe(context.Background(), ProbeRequest{Endpoint: endpoint})
+		require.False(t, result.OK)
+		require.Equal(t, ErrorCodeUnavailable, result.ErrorCode)
+		require.True(t, result.Retryable)
+		require.Contains(t, result.Message, "超时")
 	})
 }
 

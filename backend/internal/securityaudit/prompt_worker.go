@@ -160,6 +160,9 @@ func (r *Runner) processSafely(ctx context.Context, workerID int, cfg ActiveConf
 	} else {
 		r.runtime.processed.Add(1)
 		r.runtime.lastProcessedNS.Store(r.clock.Now().UnixNano())
+		// Keep the runtime card focused on the latest outcome. Historical
+		// failures remain visible in the cumulative counters and job table.
+		r.clearLastError()
 	}
 }
 
@@ -337,10 +340,20 @@ func (r *Runner) setLastError(code, _ string) {
 	r.runtime.lastErrorMu.Unlock()
 }
 
+func (r *Runner) clearLastError() {
+	if r == nil {
+		return
+	}
+	r.runtime.lastErrorMu.Lock()
+	r.runtime.lastErrorCode = ""
+	r.runtime.lastErrorMessage = ""
+	r.runtime.lastErrorMu.Unlock()
+}
+
 func scanWithFailover(ctx context.Context, scanner PromptScanner, scanners []string, endpoints []ActiveEndpoint, chunk string, metrics Metrics) (*NormalizedResult, error) {
 	var lastErr error
 	for index, endpoint := range endpoints {
-		result, err := scanner.Scan(ctx, endpoint, chunk, scanners)
+		result, err := scanEndpointWithColdStartRecovery(ctx, scanner, endpoint, chunk, scanners)
 		if err == nil && result != nil {
 			return result, nil
 		}
@@ -360,6 +373,30 @@ func scanWithFailover(ctx context.Context, scanner PromptScanner, scanners []str
 		lastErr = &GuardError{Code: ErrorCodeUnavailable}
 	}
 	return nil, lastErr
+}
+
+// scanEndpointWithColdStartRecovery keeps a short configured timeout for normal
+// audits, but retries one timed-out scan with the maximum timeout. Self-hosted
+// guard models may spend longer than the configured timeout loading the model;
+// cancelling that request also cancels the server-side load, so without this
+// retry one cold start can make every audit wait for a fresh load and time out
+// forever. This is intentionally only used by the async worker: blocking mode
+// must keep its configured request deadline.
+func scanEndpointWithColdStartRecovery(ctx context.Context, scanner PromptScanner, endpoint ActiveEndpoint, chunk string, scanners []string) (*NormalizedResult, error) {
+	result, err := scanner.Scan(ctx, endpoint, chunk, scanners)
+	if err == nil && result != nil {
+		return result, nil
+	}
+	if err == nil {
+		err = &GuardError{Code: ErrorCodeInvalidResponse, Retryable: false}
+	}
+	var guardErr *GuardError
+	if !errors.As(err, &guardErr) || !guardErr.Timeout || endpoint.TimeoutMS >= MaxTimeoutMS {
+		return nil, err
+	}
+	warmEndpoint := endpoint
+	warmEndpoint.TimeoutMS = MaxTimeoutMS
+	return scanner.Scan(ctx, warmEndpoint, chunk, scanners)
 }
 
 func retryBackoff(attempt int) time.Duration {

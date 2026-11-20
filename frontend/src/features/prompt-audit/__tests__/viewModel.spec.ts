@@ -3,6 +3,7 @@ import type { PromptAuditConfig } from '../types'
 import {
   buildUpdateRequest,
   configToDraft,
+  createDefaultEndpoint,
   draftFingerprint,
   emptyEventFilters,
   eventFilterPayload,
@@ -37,6 +38,10 @@ describe('Prompt Audit view model', () => {
   it('normalizes legacy null collections from the public config', () => {
     const legacy = { ...config(), group_ids: null, scanners: null, endpoints: null } as unknown as PromptAuditConfig
     expect(configToDraft(legacy)).toMatchObject({ group_ids: [], scanners: [], endpoints: [] })
+  })
+
+  it('defaults new endpoints to a cold-start-safe timeout', () => {
+    expect(createDefaultEndpoint().timeout_ms).toBe(30000)
   })
 
   it('models all nine official input scanners', () => {

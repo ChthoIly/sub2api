@@ -18,13 +18,15 @@ const (
 	MaxWorkerCount       = 32
 	DefaultQueueCapacity = 32768
 	MaxQueueCapacity     = 100000
-	DefaultTimeoutMS     = 3000
 	MinTimeoutMS         = 100
 	MaxTimeoutMS         = 30000
-	DefaultInputLimit    = 4000
-	MinInputLimit        = 128
-	MaxInputLimit        = 100000
-	DefaultPayloadTTL    = 30 * time.Minute
+	// DefaultTimeoutMS allows a cold-starting self-hosted guard model to load.
+	// A shorter default caused every scan to cancel model loading and retry forever.
+	DefaultTimeoutMS  = MaxTimeoutMS
+	DefaultInputLimit = 4000
+	MinInputLimit     = 128
+	MaxInputLimit     = 100000
+	DefaultPayloadTTL = 30 * time.Minute
 )
 
 type SecretEncryptor interface {
