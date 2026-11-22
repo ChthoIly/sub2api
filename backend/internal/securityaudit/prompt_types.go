@@ -98,6 +98,18 @@ type Request struct {
 	Model      string
 	Body       []byte
 	Stage      string
+
+	// OfficialClaudeCodeClient marks a request recognized as an official Claude
+	// Code client: either via the full gateway validator, or via the audit-only
+	// sub-request fallback (official CLI UA + Anthropic headers + a Claude Code
+	// system prompt) which does not require metadata.user_id. It ONLY causes
+	// verbatim Claude Code harness boilerplate (identity/billing/environment/
+	// skill/advisor blocks and reminder wrappers) to be stripped from the audit
+	// input so its defensive security wording is not classified as a user
+	// jailbreak. It never lets any client-authored content — plain system text,
+	// reminders, transcripts, or messages — skip scanning. Other clients are
+	// never filtered.
+	OfficialClaudeCodeClient bool
 }
 
 func (r Request) Clone() Request {

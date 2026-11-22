@@ -9,6 +9,7 @@ import (
 
 	"github.com/Wei-Shaw/sub2api/internal/securityaudit"
 	middleware2 "github.com/Wei-Shaw/sub2api/internal/server/middleware"
+	"github.com/Wei-Shaw/sub2api/internal/service"
 	"github.com/gin-gonic/gin"
 	"github.com/stretchr/testify/require"
 	"go.uber.org/zap"
@@ -179,4 +180,85 @@ func (e *turnCountingEngine) Evaluate(context.Context, securityaudit.Request) (*
 		return e.decisions[call-1], nil
 	}
 	return &securityaudit.PromptDecision{Kind: securityaudit.DecisionAllow, AllowNextStage: true}, nil
+}
+
+func TestIsOfficialClaudeCodeAuditRequestRequiresStrictClientValidation(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	body := []byte(`{
+"model":"claude-sonnet-4-5",
+"system":[{"type":"text","text":"You are Claude Code, Anthropic's official CLI for Claude."}],
+"metadata":{"user_id":"user_aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa_account__session_12345678-1234-1234-1234-123456789abc"},
+"messages":[{"role":"user","content":"hello"}]
+}`)
+
+	t.Run("valid official request", func(t *testing.T) {
+		recorder := httptest.NewRecorder()
+		c, _ := gin.CreateTestContext(recorder)
+		c.Request = httptest.NewRequest(http.MethodPost, "/v1/messages", nil)
+		c.Request.Header.Set("User-Agent", "claude-cli/2.1.260 (external, cli)")
+		c.Request.Header.Set("X-App", "cli")
+		c.Request.Header.Set("anthropic-beta", "beta")
+		c.Request.Header.Set("anthropic-version", "2023-06-01")
+		require.True(t, isOfficialClaudeCodeAuditRequest(c, body))
+	})
+
+	t.Run("same body without official UA is not trusted", func(t *testing.T) {
+		recorder := httptest.NewRecorder()
+		c, _ := gin.CreateTestContext(recorder)
+		c.Request = httptest.NewRequest(http.MethodPost, "/v1/messages", nil)
+		c.Request.Header.Set("User-Agent", "curl/8.6.0")
+		require.False(t, isOfficialClaudeCodeAuditRequest(c, body))
+	})
+
+	t.Run("claude cli UA without required request proof is not trusted", func(t *testing.T) {
+		recorder := httptest.NewRecorder()
+		c, _ := gin.CreateTestContext(recorder)
+		c.Request = httptest.NewRequest(http.MethodPost, "/v1/messages", nil)
+		c.Request.Header.Set("User-Agent", "claude-cli/2.1.260 (external, cli)")
+		require.False(t, isOfficialClaudeCodeAuditRequest(c, body))
+	})
+
+	t.Run("official subagent or advisor request without metadata.user_id is trusted for audit stripping only", func(t *testing.T) {
+		subReqBody := []byte(`{
+"model":"claude-opus-5-5",
+"system":[{"type":"text","text":"x-anthropic-billing-header: cc_version=2.1.314.858; cc_entrypoint=codexhost-sdk; cc_is_subagent=true;"},{"type":"text","text":"You are a Claude agent, built on Anthropic's Claude Agent SDK."}],
+"messages":[{"role":"user","content":"hello"}]
+}`)
+		recorder := httptest.NewRecorder()
+		c, _ := gin.CreateTestContext(recorder)
+		c.Request = httptest.NewRequest(http.MethodPost, "/v1/messages", nil)
+		c.Request.Header.Set("User-Agent", "claude-cli/2.1.314 (external, sdk-cli)")
+		c.Request.Header.Set("X-App", "cli")
+		c.Request.Header.Set("anthropic-beta", "beta")
+		c.Request.Header.Set("anthropic-version", "2023-06-01")
+		require.True(t, isOfficialClaudeCodeAuditRequest(c, subReqBody))
+		require.False(t, service.IsClaudeCodeClient(c.Request.Context()), "gateway ClaudeCodeOnly access flag must remain strict")
+	})
+}
+
+func TestBuildSecurityAuditRequestCarriesOfficialClaudeCodeFlag(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	body := []byte(`{
+"model":"claude-sonnet-4-5",
+"system":[{"type":"text","text":"You are Claude Code, Anthropic's official CLI for Claude."}],
+"metadata":{"user_id":"user_aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa_account__session_12345678-1234-1234-1234-123456789abc"},
+"messages":[{"role":"user","content":"hello"}]
+}`)
+	recorder := httptest.NewRecorder()
+	c, _ := gin.CreateTestContext(recorder)
+	c.Request = httptest.NewRequest(http.MethodPost, "/v1/messages", nil)
+	c.Request.Header.Set("User-Agent", "claude-cli/2.1.260 (external, cli)")
+	c.Request.Header.Set("X-App", "cli")
+	c.Request.Header.Set("anthropic-beta", "beta")
+	c.Request.Header.Set("anthropic-version", "2023-06-01")
+
+	request := buildSecurityAuditRequest(c, nil, middleware2.AuthSubject{UserID: 7}, "anthropic_messages", "claude-sonnet-4-5", body, "http")
+	require.True(t, request.OfficialClaudeCodeClient)
+
+	nonCLIRecorder := httptest.NewRecorder()
+	nonCLI, _ := gin.CreateTestContext(nonCLIRecorder)
+	nonCLI.Request = httptest.NewRequest(http.MethodPost, "/v1/messages", nil)
+	nonCLI.Request.Header.Set("User-Agent", "curl/8.6.0")
+	request = buildSecurityAuditRequest(nonCLI, nil, middleware2.AuthSubject{UserID: 7}, "anthropic_messages", "claude-sonnet-4-5", body, "http")
+	require.False(t, request.OfficialClaudeCodeClient)
 }

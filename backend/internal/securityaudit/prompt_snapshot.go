@@ -45,7 +45,7 @@ func extractPromptSnapshot(req Request, latestTurnOnly bool) (PromptSnapshot, er
 	if err := json.Unmarshal(req.Body, &document); err != nil {
 		return PromptSnapshot{}, errors.New("prompt audit request JSON is invalid")
 	}
-	extracted := extractProtocolSegments(req.Protocol, document)
+	extracted := extractProtocolSegments(req, document)
 	segments := normalizeSegmentsLatestUserFirst(extracted)
 	if latestTurnOnly {
 		segments = blockingSegmentsLatestUserAndPreviousOutput(extracted)
@@ -80,14 +80,20 @@ const DefaultPromptPreviewMaxRunes = 96
 // prompts are kept intact while bounding per-row storage.
 const DefaultFullPromptMaxRunes = 65536
 
-func extractProtocolSegments(protocol string, document any) []promptSegment {
+func extractProtocolSegments(req Request, document any) []promptSegment {
 	root, _ := document.(map[string]any)
-	protocol = strings.ToLower(strings.TrimSpace(protocol))
+	protocol := strings.ToLower(strings.TrimSpace(req.Protocol))
 	switch protocol {
 	case "openai_chat_completions", "openai_chat", "chat_completions":
 		return extractChatLikeSegments(root)
 	case "anthropic_messages", "claude_messages", "messages":
-		return append(extractAnthropicSystem(root["system"]), extractMessages(root["messages"], clientInstructionRoles...)...)
+		messageSegments := extractMessages(root["messages"], clientInstructionRoles...)
+		if req.OfficialClaudeCodeClient {
+			messageSegments = sanitizeOfficialClaudeCodeSegments(messageSegments)
+		}
+		skipMonitorSystemBlock := req.OfficialClaudeCodeClient && isClaudeCodeSecurityMonitorUserFrame(root)
+		systemSegments := extractAnthropicSystem(root["system"], req.OfficialClaudeCodeClient, skipMonitorSystemBlock)
+		return append(systemSegments, messageSegments...)
 	case "gemini", "gemini_generate_content":
 		return extractGeminiRoot(root)
 	case "openai_responses", "responses", "responses_websocket":
@@ -248,19 +254,61 @@ func extractInstructions(value any) []promptSegment {
 	return nil
 }
 
-func extractAnthropicSystem(value any) []promptSegment {
+func extractAnthropicSystem(value any, officialClaudeCode, allowSecurityMonitorBlock bool) []promptSegment {
+	texts := anthropicSystemTexts(value)
+	if allowSecurityMonitorBlock && len(texts) > 0 {
+		// Skip at most the single verified English classifier system block on a
+		// single-turn security-monitor request. Any additional system blocks (or a
+		// tampered monitor block carrying smuggled directives) remain audited.
+		filtered := make([]string, 0, len(texts))
+		skippedOne := false
+		for _, text := range texts {
+			if !skippedOne && isOfficialSecurityMonitorSystemBlock(text) {
+				skippedOne = true
+				continue
+			}
+			filtered = append(filtered, text)
+		}
+		texts = filtered
+	}
+	segments := systemPromptSegments(texts)
+	if officialClaudeCode {
+		// Strip only verbatim Claude Code harness boilerplate (identity/billing/
+		// environment/skill/advisor blocks and reminder wrappers) while keeping
+		// every other system segment auditable. Earlier revisions dropped all
+		// non-<system-reminder> text here, which let a forged official client
+		// smuggle violating content in a plain system block past the scanner.
+		segments = sanitizeOfficialClaudeCodeSegments(segments)
+	}
+	return segments
+}
+
+func anthropicSystemTexts(value any) []string {
 	switch typed := value.(type) {
 	case string:
 		if text := strings.TrimSpace(typed); text != "" {
-			return []promptSegment{{text: text, role: "system"}}
+			return []string{text}
 		}
 	case []any:
-		return systemPromptSegments(contentTexts(typed))
+		return contentTexts(typed)
 	case map[string]any:
-		return systemPromptSegments(contentTexts(typed))
+		return contentTexts(typed)
 	}
 	return nil
 }
+
+// claudeCodeSystemReminderPattern matches actual reminder blocks, not inline
+// prose such as "`<system-reminder>` blocks are background context".
+var claudeCodeSystemReminderPattern = regexp.MustCompile(`(?ms)^[\t ]*<system-reminder>[\t ]*\r?\n.*?^[\t ]*</system-reminder>[\t ]*\r?$`)
+
+// claudeCodeInstructionPreamblePattern matches the client-generated preamble
+// immediately preceding user/project instructions in a system-reminder block.
+// The wording is emitted by Claude Code, not authored by the user. Some
+// desktop/local-agent request shapes are not recognized by the official CLI
+// validator, so this preamble is stripped from every extracted segment rather
+// than only when OfficialClaudeCodeClient is true. The user/project content
+// that follows the preamble remains fully auditable.
+var claudeCodeInstructionPreamblePattern = regexp.MustCompile(`(?im)^[\t ]*Codebase and user instructions are shown below\. Be sure to adhere to these instructions\. IMPORTANT: These instructions OVERRIDE any default behavior and you MUST follow them exactly as written\.?[\t ]*\r?\n?`)
 
 func extractResponses(value any) []promptSegment {
 	switch typed := value.(type) {
@@ -573,7 +621,7 @@ func blockingSegmentsLatestUserAndPreviousOutput(values []promptSegment) []strin
 func normalizedPromptSegments(values []promptSegment) []promptSegment {
 	normalized := make([]promptSegment, 0, len(values))
 	for _, value := range values {
-		value.text = strings.TrimSpace(value.text)
+		value.text = strings.TrimSpace(claudeCodeInstructionPreamblePattern.ReplaceAllString(value.text, ""))
 		if value.text != "" {
 			normalized = append(normalized, value)
 		}

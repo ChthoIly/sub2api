@@ -2,6 +2,7 @@ package handler
 
 import (
 	"crypto/sha256"
+	"encoding/json"
 	"net/http"
 	"strings"
 
@@ -157,6 +158,48 @@ func securityAuditWSTurn(c *gin.Context) (int, bool) {
 	return turnNo, ok
 }
 
+// isOfficialClaudeCodeAuditRequest reuses the same strict Claude Code client
+// validation used by gateway access control. Some gateway entrypoints already
+// set the context flag; others (notably the OpenAI-compatible /v1/messages
+// path) reach the audit helper directly, so run validation once as a fallback.
+// Official Claude Code sub-requests (such as advisor consultations or Agent SDK
+// subagents) may omit metadata.user_id; for prompt-audit boilerplate stripping
+// only, accept requests that still carry the official CLI UA, required
+// Anthropic headers, and an official Claude Code system prompt without relaxing
+// gateway IsClaudeCodeClient access control.
+func isOfficialClaudeCodeAuditRequest(c *gin.Context, body []byte) bool {
+	if c == nil || c.Request == nil {
+		return false
+	}
+	if service.IsClaudeCodeClient(c.Request.Context()) {
+		return true
+	}
+	if !claudeCodeValidator.ValidateUserAgent(c.GetHeader("User-Agent")) {
+		return false
+	}
+	SetClaudeCodeClientContext(c, body, nil)
+	if service.IsClaudeCodeClient(c.Request.Context()) {
+		return true
+	}
+	return isOfficialClaudeCodeSubRequestForAudit(c, body)
+}
+
+func isOfficialClaudeCodeSubRequestForAudit(c *gin.Context, body []byte) bool {
+	if c == nil || c.Request == nil || len(body) == 0 {
+		return false
+	}
+	if c.GetHeader("X-App") == "" ||
+		c.GetHeader("anthropic-beta") == "" ||
+		c.GetHeader("anthropic-version") == "" {
+		return false
+	}
+	var bodyMap map[string]any
+	if err := json.Unmarshal(body, &bodyMap); err != nil {
+		return false
+	}
+	return claudeCodeValidator.IncludesClaudeCodeSystemPrompt(bodyMap)
+}
+
 func buildSecurityAuditRequest(c *gin.Context, apiKey *service.APIKey, subject middleware2.AuthSubject, protocol, model string, body []byte, stage string) securityaudit.Request {
 	legacy := buildContentModerationInput(c, apiKey, subject, protocol, model, body)
 	request := securityaudit.Request{
@@ -164,6 +207,7 @@ func buildSecurityAuditRequest(c *gin.Context, apiKey *service.APIKey, subject m
 		APIKeyID: legacy.APIKeyID, APIKeyName: legacy.APIKeyName, GroupID: cloneSecurityAuditGroupID(legacy.GroupID),
 		GroupName: legacy.GroupName, Provider: legacy.Provider, Endpoint: legacy.Endpoint,
 		Protocol: legacy.Protocol, Model: legacy.Model, Body: body, Stage: strings.TrimSpace(stage),
+		OfficialClaudeCodeClient: isOfficialClaudeCodeAuditRequest(c, body),
 	}
 	if apiKey != nil && apiKey.User != nil {
 		request.Username = apiKey.User.Username

@@ -292,6 +292,7 @@ func (s *OpenAICompatibleScanner) Scan(ctx context.Context, endpoint ActiveEndpo
 		}
 		return nil, err
 	}
+	result = RefineJailbreakResult(chunk, result)
 	result.GuardEndpointID = endpoint.ID
 	result.ScannerVersion = endpoint.Model
 	return result, nil
