@@ -87,10 +87,12 @@ func (g *GuardEvaluator) Evaluate(ctx context.Context, cfg ActiveConfig, snapsho
 			"chunk_chars": len([]rune(chunk)), "input_chars": snapshot.PromptLength, "input_limit": inputLimit,
 			"status": "started",
 		}))
-		result, err := g.scanChunk(evalCtx, cfg, endpoints, chunk)
+		result, err := scanChunkWithContextFallback(evalCtx, chunk, func(scanCtx context.Context, subChunk string) (*NormalizedResult, error) {
+			return g.scanChunk(scanCtx, cfg, endpoints, subChunk)
+		})
 		if err != nil {
 			code := guardErrorCode(err)
-			LogWarn(EventChunkFailed, mergeLogFields(baseFields, map[string]any{
+			LogWarn(EventChunkFailed, mergeLogFields(mergeLogFields(baseFields, guardErrorLogFields(err)), map[string]any{
 				"chunk_index": index + 1, "chunk_total": len(chunks),
 				"chunk_chars": len([]rune(chunk)), "input_chars": snapshot.PromptLength, "input_limit": inputLimit,
 				"latency_ms": g.clock.Now().Sub(chunkStarted).Milliseconds(), "error_code": code, "status": "failed",
@@ -106,7 +108,7 @@ func (g *GuardEvaluator) Evaluate(ctx context.Context, cfg ActiveConfig, snapsho
 					g.metrics.IncTimeout()
 				}
 			}
-			logGuardFailure(snapshot, cfg, kind, code, "", g.clock.Now().Sub(start))
+			logGuardFailureWithError(snapshot, cfg, kind, code, err, g.clock.Now().Sub(start))
 			return nil, err
 		}
 		result.ChunkTotal = len(chunks)
@@ -183,6 +185,18 @@ func logGuardFailure(snapshot PromptSnapshot, cfg ActiveConfig, kind DecisionKin
 	fields["config_version"] = cfg.ConfigVersion
 	LogWarn(EventGuardFailed, mergeLogFields(fields, map[string]any{
 		"decision": kind, "guard_endpoint_id": guardEndpointID, "latency_ms": latency.Milliseconds(),
+		"status": "failed", "error_code": code, "upstream_dispatched": false, "billing_preconsumed": false,
+	}))
+}
+
+func logGuardFailureWithError(snapshot PromptSnapshot, cfg ActiveConfig, kind DecisionKind, code string, err error, latency time.Duration) {
+	fields := mergeLogFields(snapshotLogFields(snapshot), guardErrorLogFields(err))
+	fields["config_version"] = cfg.ConfigVersion
+	if _, exists := fields["guard_endpoint_id"]; !exists {
+		fields["guard_endpoint_id"] = ""
+	}
+	LogWarn(EventGuardFailed, mergeLogFields(fields, map[string]any{
+		"decision": kind, "latency_ms": latency.Milliseconds(),
 		"status": "failed", "error_code": code, "upstream_dispatched": false, "billing_preconsumed": false,
 	}))
 }

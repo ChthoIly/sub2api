@@ -1,9 +1,13 @@
 package securityaudit
 
 import (
+	"bytes"
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
+	"log/slog"
+	"net/http"
 	"reflect"
 	"strings"
 	"sync"
@@ -626,4 +630,102 @@ func TestRequestCloneOwnsMutableInputs(t *testing.T) {
 	require.Equal(t, []byte("original"), req.Body)
 	require.Equal(t, int64(7), *req.GroupID)
 	require.False(t, reflect.ValueOf(req.Body).Pointer() == reflect.ValueOf(clone.Body).Pointer())
+}
+
+func TestWorkerAdaptiveContextSplitCoversAllContentAndPreservesBlockFindings(t *testing.T) {
+	t.Run("splits oversized chunk and detects violation in right half", func(t *testing.T) {
+		cfg := asyncConfig()
+		cfg.Endpoints = []ActiveEndpoint{{ID: "guard-ctx", Enabled: true, TimeoutMS: 1000, InputLimit: 1000}}
+		safeLeft := strings.Repeat("a", 500)
+		unsafeRight := strings.Repeat("b", 490) + "UNSAFE_TAG"
+		fullText := safeLeft + unsafeRight
+
+		repo := &fakeJobRepository{}
+		payload := &fakePayloadStore{values: map[int64]string{51: fullText}}
+		scanned := make([]string, 0, 3)
+		scanner := PromptScannerFunc(func(_ context.Context, endpoint ActiveEndpoint, chunk string, _ []string) (*NormalizedResult, error) {
+			if len([]rune(chunk)) > 600 {
+				return nil, &GuardError{
+					Code: ErrorCodeUnavailable, Kind: ErrorKindContextLengthExceeded,
+					EndpointID: endpoint.ID, HTTPStatus: http.StatusBadRequest,
+					Retryable: false, ContextExceeded: true,
+				}
+			}
+			scanned = append(scanned, chunk)
+			if strings.Contains(chunk, "UNSAFE_TAG") {
+				return &NormalizedResult{
+					Decision: EventCritical, RiskLevel: RiskCritical, Action: ActionBlock, Safety: "Unsafe",
+					Categories: []string{"jailbreak"}, MatchedScanners: []string{"jailbreak"},
+					ScannerScores: map[string]float64{"jailbreak": 1}, ScannerEvidence: map[string]string{"jailbreak": "Jailbreak"},
+					GuardEndpointID: endpoint.ID, ScannerVersion: DefaultGuardModel, PolicyID: "priority", PolicyVersion: 1,
+				}, nil
+			}
+			return &NormalizedResult{
+				Decision: EventPass, RiskLevel: RiskLow, Action: ActionAllow, Safety: "Safe",
+				Categories: []string{}, MatchedScanners: []string{},
+				ScannerScores: map[string]float64{}, ScannerEvidence: map[string]string{},
+				GuardEndpointID: endpoint.ID, ScannerVersion: DefaultGuardModel, PolicyID: "priority", PolicyVersion: 1,
+			}, nil
+		})
+		runner := NewRunner(&fakeConfigStore{cfg: cfg, active: true}, repo, payload, scanner, NewAtomicMetrics())
+		runner.clock = fixedClock{now: time.Unix(300, 0).UTC()}
+		require.NoError(t, runner.processJob(context.Background(), 0, cfg, workerJob(1, 3)))
+		require.Equal(t, fullText, strings.Join(scanned, ""), "adaptive split must scan every rune")
+		require.Equal(t, 1, repo.completeCount)
+		require.NotNil(t, repo.completedResult)
+		require.Equal(t, EventCritical, repo.completedResult.Decision)
+		require.Equal(t, ActionBlock, repo.completedResult.Action)
+		require.Equal(t, []string{"jailbreak"}, repo.completedResult.Categories)
+	})
+
+	t.Run("bounded split failure logs http_status and error_kind", func(t *testing.T) {
+		var logBuf bytes.Buffer
+		previous := slog.Default()
+		slog.SetDefault(slog.New(slog.NewJSONHandler(&logBuf, nil)))
+		t.Cleanup(func() { slog.SetDefault(previous) })
+
+		cfg := asyncConfig()
+		cfg.Endpoints = []ActiveEndpoint{{ID: "guard-400", Enabled: true, TimeoutMS: 1000, InputLimit: 1000}}
+		repo := &fakeJobRepository{}
+		payload := &fakePayloadStore{values: map[int64]string{51: strings.Repeat("x", 600)}}
+		calls := 0
+		scanner := PromptScannerFunc(func(_ context.Context, endpoint ActiveEndpoint, _ string, _ []string) (*NormalizedResult, error) {
+			calls++
+			return nil, &GuardError{
+				Code: ErrorCodeUnavailable, Kind: ErrorKindContextLengthExceeded,
+				EndpointID: endpoint.ID, HTTPStatus: http.StatusBadRequest,
+				Retryable: false, ContextExceeded: true,
+			}
+		})
+		runner := NewRunner(&fakeConfigStore{cfg: cfg, active: true}, repo, payload, scanner, NewAtomicMetrics())
+		runner.clock = fixedClock{now: time.Unix(400, 0).UTC()}
+		err := runner.processJob(context.Background(), 0, cfg, workerJob(1, 3))
+		require.Error(t, err)
+		require.LessOrEqual(t, calls, 4, "halving must stop at minContextSplitRunes / maxContextSplitDepth")
+		require.Equal(t, 1, repo.failed)
+
+		var sawChunkFailed, sawProcessFailed bool
+		for _, line := range strings.Split(strings.TrimSpace(logBuf.String()), "\n") {
+			if line == "" {
+				continue
+			}
+			var entry map[string]any
+			require.NoError(t, json.Unmarshal([]byte(line), &entry))
+			if entry["msg"] == EventChunkFailed {
+				sawChunkFailed = true
+				require.EqualValues(t, http.StatusBadRequest, entry["http_status"])
+				require.Equal(t, ErrorKindContextLengthExceeded, entry["error_kind"])
+				require.Equal(t, "guard-400", entry["guard_endpoint_id"])
+				require.Equal(t, false, entry["retryable"])
+			}
+			if entry["msg"] == EventProcessFailed {
+				sawProcessFailed = true
+				require.EqualValues(t, http.StatusBadRequest, entry["http_status"])
+				require.Equal(t, ErrorKindContextLengthExceeded, entry["error_kind"])
+				require.Equal(t, "guard-400", entry["guard_endpoint_id"])
+			}
+		}
+		require.True(t, sawChunkFailed, "chunk failed log must include structured diagnostic fields")
+		require.True(t, sawProcessFailed, "process failed log must include structured diagnostic fields")
+	})
 }

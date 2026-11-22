@@ -261,10 +261,11 @@ func (s *PromptService) Probe(ctx context.Context, request ProbeRequest) ProbeRe
 		return s.finishProbe(endpoint.ID, started, ProbeResult{OK: true, Status: "healthy", Message: "审计节点模型调用正常", HTTPStatus: http.StatusOK, TokenApplied: tokenApplied})
 	}
 	code, status, retryable := guardErrorCode(scanErr), 0, false
-	timedOut := false
+	timedOut, contextExceeded := false, false
+	errorKind := ""
 	var guardErr *GuardError
 	if errors.As(scanErr, &guardErr) {
-		status, retryable, timedOut = guardErr.HTTPStatus, guardErr.Retryable, guardErr.Timeout
+		status, retryable, timedOut, contextExceeded, errorKind = guardErr.HTTPStatus, guardErr.Retryable, guardErr.Timeout, guardErr.ContextExceeded, guardErr.Kind
 	}
 	if code == "" {
 		code = ErrorCodeInvalidResponse
@@ -273,10 +274,16 @@ func (s *PromptService) Probe(ctx context.Context, request ProbeRequest) ProbeRe
 	switch {
 	case timedOut:
 		message = "审计节点模型调用超时，请提高节点总超时或先预加载模型"
+	case contextExceeded:
+		message = "审计节点上下文长度不足，请调大服务端上下文长度或调小节点单块上限"
+	case status == http.StatusUnauthorized || status == http.StatusForbidden:
+		message = "审计节点鉴权失败，请检查令牌配置"
+	case status >= 400 && status < 500:
+		message = "审计节点拒绝请求，请检查模型名称与请求配置"
 	case code == ErrorCodeInvalidResponse:
 		message = "审计节点模型返回格式无效"
 	}
-	return s.finishProbe(endpoint.ID, started, ProbeResult{Status: "failed", ErrorCode: code, Message: message, HTTPStatus: status, Retryable: retryable, TokenApplied: tokenApplied})
+	return s.finishProbe(endpoint.ID, started, ProbeResult{Status: "failed", ErrorCode: code, Message: message, HTTPStatus: status, Retryable: retryable, TokenApplied: tokenApplied}, errorKind)
 }
 
 func (s *PromptService) resolveProbeEndpoint(input UpdateEndpoint) (ActiveEndpoint, bool, error) {
@@ -327,13 +334,17 @@ func (s *PromptService) resolveProbeEndpoint(input UpdateEndpoint) (ActiveEndpoi
 	return ActiveEndpoint{ID: storage.Endpoints[0].ID, Name: storage.Endpoints[0].Name, Protocol: "openai_compatible", BaseURL: baseURL, Model: model, Token: token, TimeoutMS: timeout, InputLimit: limit, Enabled: true}, token != "", nil
 }
 
-func (s *PromptService) finishProbe(id string, started time.Time, result ProbeResult) ProbeResult {
+func (s *PromptService) finishProbe(id string, started time.Time, result ProbeResult, errorKind ...string) ProbeResult {
 	result.CheckedAt = s.clock.Now()
 	result.LatencyMS = int(result.CheckedAt.Sub(started).Milliseconds())
 	if result.OK {
 		LogInfo(EventProbeFinished, map[string]any{"guard_endpoint_id": id, "status": result.Status, "latency_ms": result.LatencyMS, "http_status": result.HTTPStatus})
 	} else {
-		LogWarn(EventProbeFailed, map[string]any{"guard_endpoint_id": id, "status": result.Status, "latency_ms": result.LatencyMS, "http_status": result.HTTPStatus, "error_code": result.ErrorCode, "retryable": result.Retryable})
+		fields := map[string]any{"guard_endpoint_id": id, "status": result.Status, "latency_ms": result.LatencyMS, "http_status": result.HTTPStatus, "error_code": result.ErrorCode, "retryable": result.Retryable}
+		if len(errorKind) > 0 && errorKind[0] != "" {
+			fields["error_kind"] = errorKind[0]
+		}
+		LogWarn(EventProbeFailed, fields)
 	}
 	s.probeMu.Lock()
 	s.probes[id] = result

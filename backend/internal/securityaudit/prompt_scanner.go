@@ -1,11 +1,21 @@
 package securityaudit
 
 import (
+	"context"
 	"errors"
 	"sort"
 	"strings"
 	"time"
 	"unicode/utf8"
+)
+
+const (
+	// minContextSplitRunes stops adaptive splitting once a chunk is already
+	// small enough that further halving would indicate an unusable context limit.
+	minContextSplitRunes = 256
+	// maxContextSplitDepth bounds recursive halving to at most 2^4 = 16 parts per
+	// planned chunk (e.g. 8000 -> 4000 -> 2000 -> 1000 -> 500 runes).
+	maxContextSplitDepth = 4
 )
 
 func SplitRunes(value string, limit int) []string {
@@ -70,6 +80,9 @@ func AggregateResults(results []*NormalizedResult, latency time.Duration) (*Norm
 			aggregated.PolicyID = result.PolicyID
 			aggregated.PolicyVersion = result.PolicyVersion
 		}
+		if aggregated.Safety == "" && result.Safety != "" {
+			aggregated.Safety = result.Safety
+		}
 		for _, category := range result.Categories {
 			categories[category] = struct{}{}
 		}
@@ -130,4 +143,79 @@ func orderedScannerKeys(values map[string]struct{}) []string {
 	}
 	result = append(result, sortedKeys(remaining)...)
 	return result
+}
+
+func isContextExceededError(err error) bool {
+	var guardErr *GuardError
+	return errors.As(err, &guardErr) && guardErr.ContextExceeded
+}
+
+func splitChunkInHalf(chunk string) (string, string, bool) {
+	runes := []rune(chunk)
+	if len(runes) <= minContextSplitRunes {
+		return "", "", false
+	}
+	mid := len(runes) / 2
+	if mid == 0 || mid >= len(runes) {
+		return "", "", false
+	}
+	return string(runes[:mid]), string(runes[mid:]), true
+}
+
+// scanChunkWithContextFallback halves a chunk when an upstream guard rejects it
+// for exceeding the model's context window (for example a dense 8000-rune code
+// chunk hitting a 4096-token limit). Every resulting sub-chunk must be scanned
+// (unless an earlier sub-chunk already blocks) so adaptive splitting never
+// weakens coverage.
+func scanChunkWithContextFallback(
+	ctx context.Context,
+	chunk string,
+	scanFn func(context.Context, string) (*NormalizedResult, error),
+) (*NormalizedResult, error) {
+	return scanChunkWithContextFallbackDepth(ctx, chunk, 0, scanFn)
+}
+
+func scanChunkWithContextFallbackDepth(
+	ctx context.Context,
+	chunk string,
+	depth int,
+	scanFn func(context.Context, string) (*NormalizedResult, error),
+) (*NormalizedResult, error) {
+	result, err := scanFn(ctx, chunk)
+	if err == nil {
+		return result, nil
+	}
+	if !isContextExceededError(err) || depth >= maxContextSplitDepth || ctx.Err() != nil {
+		return nil, err
+	}
+	left, right, ok := splitChunkInHalf(chunk)
+	if !ok {
+		return nil, err
+	}
+	leftResult, leftErr := scanChunkWithContextFallbackDepth(ctx, left, depth+1, scanFn)
+	if leftErr != nil {
+		return nil, leftErr
+	}
+	if leftResult == nil {
+		return nil, &GuardError{Code: ErrorCodeInvalidResponse, Kind: ErrorKindInvalidResponse}
+	}
+	if leftResult.Action == ActionBlock {
+		return leftResult, nil
+	}
+	if ctx.Err() != nil {
+		kind := ErrorKindConnectionFailed
+		timeout := errors.Is(ctx.Err(), context.DeadlineExceeded)
+		if timeout {
+			kind = ErrorKindTimeout
+		}
+		return nil, &GuardError{Code: ErrorCodeUnavailable, Kind: kind, Retryable: true, Timeout: timeout, Cause: ctx.Err()}
+	}
+	rightResult, rightErr := scanChunkWithContextFallbackDepth(ctx, right, depth+1, scanFn)
+	if rightErr != nil {
+		return nil, rightErr
+	}
+	if rightResult == nil {
+		return nil, &GuardError{Code: ErrorCodeInvalidResponse, Kind: ErrorKindInvalidResponse}
+	}
+	return AggregateResults([]*NormalizedResult{leftResult, rightResult}, 0)
 }

@@ -58,12 +58,31 @@ var categoryAliases = map[string]string{
 	"jailbreak": "jailbreak", "prompt injection": "jailbreak",
 }
 
+const (
+	ErrorKindTimeout               = "timeout"
+	ErrorKindConnectionFailed      = "connection_failed"
+	ErrorKindContextLengthExceeded = "context_length_exceeded"
+	ErrorKindHTTPAuthError         = "http_auth_error"
+	ErrorKindHTTPRateLimited       = "http_rate_limited"
+	ErrorKindHTTPServerError       = "http_server_error"
+	ErrorKindHTTPClientError       = "http_client_error"
+	ErrorKindResponseReadFailed    = "response_read_failed"
+	ErrorKindResponseOversize      = "response_oversize"
+	ErrorKindInvalidResponse       = "invalid_response"
+	ErrorKindClientConfig          = "client_config_error"
+
+	maxGuardErrorBodyBytes int64 = 4096
+)
+
 type GuardError struct {
-	Code       string
-	HTTPStatus int
-	Retryable  bool
-	Timeout    bool
-	Cause      error
+	Code            string
+	Kind            string
+	EndpointID      string
+	HTTPStatus      int
+	Retryable       bool
+	Timeout         bool
+	ContextExceeded bool
+	Cause           error
 }
 
 func (e *GuardError) Error() string {
@@ -196,11 +215,11 @@ func NewOpenAICompatibleScanner() *OpenAICompatibleScanner { return &OpenAICompa
 func (s *OpenAICompatibleScanner) Scan(ctx context.Context, endpoint ActiveEndpoint, chunk string, enabledScanners []string) (*NormalizedResult, error) {
 	client, err := s.clientFor(endpoint)
 	if err != nil {
-		return nil, &GuardError{Code: ErrorCodeUnavailable, Cause: err}
+		return nil, &GuardError{Code: ErrorCodeUnavailable, Kind: ErrorKindClientConfig, EndpointID: endpoint.ID, Cause: err}
 	}
 	requestURL, err := ChatCompletionsURL(endpoint.BaseURL)
 	if err != nil {
-		return nil, &GuardError{Code: ErrorCodeUnavailable, Cause: err}
+		return nil, &GuardError{Code: ErrorCodeUnavailable, Kind: ErrorKindClientConfig, EndpointID: endpoint.ID, Cause: err}
 	}
 	payload := map[string]any{
 		"model":       endpoint.Model,
@@ -211,11 +230,11 @@ func (s *OpenAICompatibleScanner) Scan(ctx context.Context, endpoint ActiveEndpo
 	}
 	body, err := json.Marshal(payload)
 	if err != nil {
-		return nil, &GuardError{Code: ErrorCodeInvalidResponse, Cause: err}
+		return nil, &GuardError{Code: ErrorCodeInvalidResponse, Kind: ErrorKindInvalidResponse, EndpointID: endpoint.ID, Cause: err}
 	}
 	req, err := http.NewRequestWithContext(ctx, http.MethodPost, requestURL, bytes.NewReader(body))
 	if err != nil {
-		return nil, &GuardError{Code: ErrorCodeUnavailable, Cause: err}
+		return nil, &GuardError{Code: ErrorCodeUnavailable, Kind: ErrorKindClientConfig, EndpointID: endpoint.ID, Cause: err}
 	}
 	req.Header.Set("Content-Type", "application/json")
 	if endpoint.Token != "" {
@@ -228,32 +247,103 @@ func (s *OpenAICompatibleScanner) Scan(ctx context.Context, endpoint ActiveEndpo
 		if errors.As(err, &netErr) && netErr.Timeout() {
 			timeout = true
 		}
-		return nil, &GuardError{Code: ErrorCodeUnavailable, Retryable: true, Timeout: timeout, Cause: err}
+		kind := ErrorKindConnectionFailed
+		if timeout {
+			kind = ErrorKindTimeout
+		}
+		return nil, &GuardError{Code: ErrorCodeUnavailable, Kind: kind, EndpointID: endpoint.ID, Retryable: true, Timeout: timeout, Cause: err}
 	}
 	defer func() { _ = resp.Body.Close() }()
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
+		errorBody, _ := io.ReadAll(io.LimitReader(resp.Body, maxGuardErrorBodyBytes))
+		contextExceeded := isContextLengthExceededResponse(resp.StatusCode, errorBody)
 		retryable := resp.StatusCode == http.StatusTooManyRequests || resp.StatusCode >= 500
-		return nil, &GuardError{Code: ErrorCodeUnavailable, HTTPStatus: resp.StatusCode, Retryable: retryable}
+		return nil, &GuardError{
+			Code:            ErrorCodeUnavailable,
+			Kind:            classifyHTTPFailureKind(resp.StatusCode, contextExceeded),
+			EndpointID:      endpoint.ID,
+			HTTPStatus:      resp.StatusCode,
+			Retryable:       retryable,
+			ContextExceeded: contextExceeded,
+		}
 	}
 	limited := io.LimitReader(resp.Body, maxGuardResponseBytes+1)
 	responseBody, err := io.ReadAll(limited)
 	if err != nil {
-		return nil, &GuardError{Code: ErrorCodeUnavailable, Retryable: true, Cause: err}
+		return nil, &GuardError{Code: ErrorCodeUnavailable, Kind: ErrorKindResponseReadFailed, EndpointID: endpoint.ID, Retryable: true, Cause: err}
 	}
 	if int64(len(responseBody)) > maxGuardResponseBytes {
-		return nil, &GuardError{Code: ErrorCodeInvalidResponse}
+		return nil, &GuardError{Code: ErrorCodeInvalidResponse, Kind: ErrorKindResponseOversize, EndpointID: endpoint.ID}
 	}
 	content, err := extractOpenAIContent(responseBody)
 	if err != nil {
-		return nil, &GuardError{Code: ErrorCodeInvalidResponse, Cause: err}
+		return nil, &GuardError{Code: ErrorCodeInvalidResponse, Kind: ErrorKindInvalidResponse, EndpointID: endpoint.ID, Cause: err}
 	}
 	result, err := ParseQwen3Guard(content, enabledScanners)
 	if err != nil {
+		var guardErr *GuardError
+		if errors.As(err, &guardErr) {
+			if guardErr.Kind == "" {
+				guardErr.Kind = ErrorKindInvalidResponse
+			}
+			if guardErr.EndpointID == "" {
+				guardErr.EndpointID = endpoint.ID
+			}
+		}
 		return nil, err
 	}
 	result.GuardEndpointID = endpoint.ID
 	result.ScannerVersion = endpoint.Model
 	return result, nil
+}
+
+func classifyHTTPFailureKind(statusCode int, contextExceeded bool) string {
+	switch {
+	case contextExceeded:
+		return ErrorKindContextLengthExceeded
+	case statusCode == http.StatusUnauthorized || statusCode == http.StatusForbidden:
+		return ErrorKindHTTPAuthError
+	case statusCode == http.StatusTooManyRequests:
+		return ErrorKindHTTPRateLimited
+	case statusCode >= 500:
+		return ErrorKindHTTPServerError
+	default:
+		return ErrorKindHTTPClientError
+	}
+}
+
+// isContextLengthExceededResponse inspects a bounded error body solely for
+// fixed context-limit signatures and discards the body so raw upstream text
+// never enters errors or logs.
+func isContextLengthExceededResponse(statusCode int, body []byte) bool {
+	if statusCode == http.StatusRequestEntityTooLarge {
+		return true
+	}
+	if statusCode != http.StatusBadRequest && statusCode != http.StatusUnprocessableEntity {
+		return false
+	}
+	lower := strings.ToLower(string(body))
+	if lower == "" {
+		return false
+	}
+	for _, phrase := range []string{
+		"exceeds the available context size",
+		"exceeds available context",
+		"maximum context length",
+		"context_length_exceeded",
+		"context length exceeded",
+		"too many tokens",
+		"input is too long",
+		"prompt is too long",
+	} {
+		if strings.Contains(lower, phrase) {
+			return true
+		}
+	}
+	if strings.Contains(lower, "context") && (strings.Contains(lower, "exceed") || strings.Contains(lower, "too large") || strings.Contains(lower, "too long")) {
+		return true
+	}
+	return false
 }
 
 func (s *OpenAICompatibleScanner) clientFor(endpoint ActiveEndpoint) (*http.Client, error) {

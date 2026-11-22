@@ -189,13 +189,15 @@ func (r *Runner) processJob(ctx context.Context, workerID int, cfg ActiveConfig,
 		}
 		chunkStarted := r.clock.Now()
 		LogInfo(EventChunkStarted, mergeLogFields(baseFields, map[string]any{"worker_id": workerID, "chunk_index": index + 1, "chunk_total": len(chunks), "chunk_chars": len([]rune(chunk)), "input_chars": job.Snapshot.PromptLength, "input_limit": minimumInputLimit(endpoints), "status": "started"}))
-		result, scanErr := scanWithFailover(ctx, r.scanner, cfg.Scanners, endpoints, chunk, r.metrics)
+		result, scanErr := scanChunkWithContextFallback(ctx, chunk, func(scanCtx context.Context, subChunk string) (*NormalizedResult, error) {
+			return scanWithFailover(scanCtx, r.scanner, cfg.Scanners, endpoints, subChunk, r.metrics)
+		})
 		if scanErr != nil {
-			LogWarn(EventChunkFailed, mergeLogFields(baseFields, map[string]any{
+			LogWarn(EventChunkFailed, mergeLogFields(mergeLogFields(baseFields, guardErrorLogFields(scanErr)), map[string]any{
 				"worker_id": workerID, "chunk_index": index + 1, "chunk_total": len(chunks),
 				"chunk_chars": len([]rune(chunk)), "input_chars": job.Snapshot.PromptLength,
 				"input_limit": minimumInputLimit(endpoints), "latency_ms": r.clock.Now().Sub(chunkStarted).Milliseconds(),
-				"error_code": guardErrorCode(scanErr), "status": "failed",
+				"status": "failed",
 			}))
 			r.observeAsyncFailure(scanErr, r.clock.Now().Sub(started))
 			return r.finishFailure(ctx, job, scanErr)
@@ -278,13 +280,13 @@ func (r *Runner) finishFailure(ctx context.Context, job *Job, err error) error {
 		if updateErr := r.repo.Retry(ctx, job.ID, job.ClaimVersion, next, code, "prompt guard temporarily unavailable"); updateErr != nil {
 			return updateErr
 		}
-		LogWarn(EventProcessFailed, mergeLogFields(baseFields, map[string]any{"attempts": job.Attempts, "max_attempts": job.MaxAttempts, "status": "retry", "error_code": code, "retryable": true}))
+		LogWarn(EventProcessFailed, mergeLogFields(mergeLogFields(baseFields, guardErrorLogFields(err)), map[string]any{"attempts": job.Attempts, "max_attempts": job.MaxAttempts, "status": "retry", "error_code": code, "retryable": true}))
 	} else {
 		if updateErr := r.repo.Fail(ctx, job.ID, job.ClaimVersion, code, "prompt guard processing failed"); updateErr != nil {
 			return updateErr
 		}
 		_ = r.payload.Delete(ctx, job.ID)
-		LogError(EventProcessFailed, mergeLogFields(baseFields, map[string]any{"attempts": job.Attempts, "max_attempts": job.MaxAttempts, "status": "failed", "error_code": code, "retryable": false}))
+		LogError(EventProcessFailed, mergeLogFields(mergeLogFields(baseFields, guardErrorLogFields(err)), map[string]any{"attempts": job.Attempts, "max_attempts": job.MaxAttempts, "status": "failed", "error_code": code, "retryable": false}))
 	}
 	r.setLastError(code, err.Error())
 	return err

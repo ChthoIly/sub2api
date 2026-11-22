@@ -298,3 +298,45 @@ type PromptScannerFunc func(context.Context, ActiveEndpoint, string, []string) (
 func (f PromptScannerFunc) Scan(ctx context.Context, endpoint ActiveEndpoint, chunk string, scanners []string) (*NormalizedResult, error) {
 	return f(ctx, endpoint, chunk, scanners)
 }
+
+func TestGuardEvaluatorAdaptiveContextSplitAndShortCircuitBlock(t *testing.T) {
+	scanned := make([]string, 0, 2)
+	scanner := PromptScannerFunc(func(_ context.Context, endpoint ActiveEndpoint, chunk string, _ []string) (*NormalizedResult, error) {
+		if len([]rune(chunk)) > 400 {
+			return nil, &GuardError{
+				Code: ErrorCodeUnavailable, Kind: ErrorKindContextLengthExceeded,
+				EndpointID: endpoint.ID, HTTPStatus: 400, Retryable: false, ContextExceeded: true,
+			}
+		}
+		scanned = append(scanned, chunk)
+		if strings.Contains(chunk, "BLOCK_LEFT") {
+			return &NormalizedResult{
+				Decision: EventCritical, RiskLevel: RiskCritical, Action: ActionBlock, Safety: "Unsafe",
+				Categories: []string{"jailbreak"}, MatchedScanners: []string{"jailbreak"},
+				ScannerScores: map[string]float64{"jailbreak": 1}, ScannerEvidence: map[string]string{"jailbreak": "Jailbreak"},
+				GuardEndpointID: endpoint.ID,
+			}, nil
+		}
+		return &NormalizedResult{
+			Decision: EventPass, RiskLevel: RiskLow, Action: ActionAllow, Safety: "Safe",
+			ScannerScores: map[string]float64{}, ScannerEvidence: map[string]string{}, GuardEndpointID: endpoint.ID,
+		}, nil
+	})
+	evaluator := newGuardEvaluator(scanner, nil, NewAtomicMetrics(), 2, 2)
+	cfg := guardConfig(ActiveEndpoint{ID: "one", Enabled: true, TimeoutMS: 1000, InputLimit: 800})
+
+	// Both halves pass
+	decision, err := evaluator.Evaluate(context.Background(), cfg, PromptSnapshot{ScanText: strings.Repeat("a", 600), PromptLength: 600})
+	require.NoError(t, err)
+	require.Equal(t, DecisionAllow, decision.Kind)
+	require.Equal(t, "Safe", decision.Result.Safety)
+	require.Len(t, scanned, 2)
+
+	// Left half blocks and short-circuits right half
+	scanned = scanned[:0]
+	leftBlock := "BLOCK_LEFT" + strings.Repeat("b", 590)
+	decision, err = evaluator.Evaluate(context.Background(), cfg, PromptSnapshot{ScanText: leftBlock, PromptLength: len([]rune(leftBlock))})
+	require.NoError(t, err)
+	require.Equal(t, DecisionBlock, decision.Kind)
+	require.Len(t, scanned, 1, "block on left sub-chunk should short-circuit right sub-chunk")
+}

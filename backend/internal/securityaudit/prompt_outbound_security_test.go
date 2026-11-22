@@ -130,6 +130,52 @@ func TestOpenAICompatibleScannerClassifiesHTTPConnectionAndTimeoutFailures(t *te
 	require.ErrorAs(t, err, &timeoutErr)
 	require.True(t, timeoutErr.Retryable)
 	require.True(t, timeoutErr.Timeout)
+	require.Equal(t, ErrorKindTimeout, timeoutErr.Kind)
+	require.Equal(t, "timeout", timeoutErr.EndpointID)
+}
+
+func TestOpenAICompatibleScannerDetectsContextExceededWithoutLeakingBody(t *testing.T) {
+	const canary = "PROMPT_CANARY_UPSTREAM_ERROR_BODY"
+	tests := []struct {
+		name   string
+		status int
+		body   string
+	}{
+		{
+			name:   "ollama llama-server context exceeded",
+			status: http.StatusBadRequest,
+			body:   `{"error":{"message":"request (4828 tokens) exceeds the available context size (4096 tokens), try increasing it ` + canary + `","type":"exceed_context_size_error"}}`,
+		},
+		{
+			name:   "openai maximum context length",
+			status: http.StatusBadRequest,
+			body:   `{"error":{"code":"context_length_exceeded","message":"This model's maximum context length is 4096 tokens ` + canary + `"}}`,
+		},
+		{
+			name:   "payload too large 413",
+			status: http.StatusRequestEntityTooLarge,
+			body:   canary,
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+				w.WriteHeader(tt.status)
+				_, _ = w.Write([]byte(tt.body))
+			}))
+			defer server.Close()
+			_, err := NewOpenAICompatibleScanner().Scan(context.Background(), ActiveEndpoint{ID: "ctx-node", BaseURL: server.URL, Model: DefaultGuardModel, TimeoutMS: 1000}, "hello", AllScannerIDs)
+			var guardErr *GuardError
+			require.ErrorAs(t, err, &guardErr)
+			require.Equal(t, ErrorCodeUnavailable, guardErr.Code)
+			require.Equal(t, ErrorKindContextLengthExceeded, guardErr.Kind)
+			require.Equal(t, "ctx-node", guardErr.EndpointID)
+			require.Equal(t, tt.status, guardErr.HTTPStatus)
+			require.False(t, guardErr.Retryable)
+			require.True(t, guardErr.ContextExceeded)
+			require.NotContains(t, err.Error(), canary)
+		})
+	}
 }
 
 func TestPromptAuditProbeUsesRealModelInferenceAndResponseSafety(t *testing.T) {
@@ -186,6 +232,20 @@ func TestPromptAuditProbeUsesRealModelInferenceAndResponseSafety(t *testing.T) {
 		require.Equal(t, ErrorCodeUnavailable, result.ErrorCode)
 		require.True(t, result.Retryable)
 		require.Contains(t, result.Message, "超时")
+	})
+
+	t.Run("context exceeded message is actionable", func(t *testing.T) {
+		server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+			w.WriteHeader(http.StatusBadRequest)
+			_, _ = w.Write([]byte(`{"error":{"message":"request (4828 tokens) exceeds the available context size (4096 tokens)"}}`))
+		}))
+		defer server.Close()
+		result := newProbeTestService().Probe(context.Background(), ProbeRequest{Endpoint: probeEndpoint(server.URL, "temporary-token")})
+		require.False(t, result.OK)
+		require.Equal(t, ErrorCodeUnavailable, result.ErrorCode)
+		require.Equal(t, http.StatusBadRequest, result.HTTPStatus)
+		require.False(t, result.Retryable)
+		require.Contains(t, result.Message, "上下文长度")
 	})
 }
 

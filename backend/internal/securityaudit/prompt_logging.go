@@ -2,6 +2,7 @@ package securityaudit
 
 import (
 	"context"
+	"errors"
 	"log/slog"
 	"strings"
 )
@@ -170,4 +171,24 @@ func stableErrorMessage(code string) string {
 func sanitizeStoredError(code string) (string, string) {
 	stableCode := stableErrorCode(code)
 	return stableCode, TrimRunes(stableErrorMessage(stableCode), 160)
+}
+
+func guardErrorLogFields(err error) map[string]any {
+	fields := map[string]any{
+		"error_code": guardErrorCode(err),
+	}
+	var guardErr *GuardError
+	if errors.As(err, &guardErr) {
+		fields["retryable"] = guardErr.Retryable
+		if guardErr.HTTPStatus > 0 {
+			fields["http_status"] = guardErr.HTTPStatus
+		}
+		if guardErr.Kind != "" {
+			fields["error_kind"] = guardErr.Kind
+		}
+		if guardErr.EndpointID != "" {
+			fields["guard_endpoint_id"] = guardErr.EndpointID
+		}
+	}
+	return fields
 }
