@@ -8,15 +8,23 @@ import (
 )
 
 type GuardEvaluator struct {
-	scanner PromptScanner
-	repo    JobRepository
-	metrics Metrics
-	clock   Clock
+	scanner    PromptScanner
+	repo       JobRepository
+	metrics    Metrics
+	clock      Clock
+	chunkCache ChunkResultCache
 
 	global       chan struct{}
 	perNodeLimit int
 	nodeMu       sync.Mutex
 	nodes        map[string]chan struct{}
+}
+
+func (g *GuardEvaluator) SetChunkCache(cache ChunkResultCache) {
+	if g == nil {
+		return
+	}
+	g.chunkCache = cache
 }
 
 func NewGuardEvaluator(scanner PromptScanner, repo JobRepository, metrics Metrics) *GuardEvaluator {
@@ -82,34 +90,52 @@ func (g *GuardEvaluator) Evaluate(ctx context.Context, cfg ActiveConfig, snapsho
 	results := make([]*NormalizedResult, 0, len(chunks))
 	for index, chunk := range chunks {
 		chunkStarted := g.clock.Now()
-		LogInfo(EventChunkStarted, mergeLogFields(baseFields, map[string]any{
-			"chunk_index": index + 1, "chunk_total": len(chunks),
-			"chunk_chars": len([]rune(chunk)), "input_chars": snapshot.PromptLength, "input_limit": inputLimit,
-			"status": "started",
-		}))
-		result, err := scanChunkWithContextFallback(evalCtx, chunk, func(scanCtx context.Context, subChunk string) (*NormalizedResult, error) {
-			return g.scanChunk(scanCtx, cfg, endpoints, subChunk)
-		})
-		if err != nil {
-			code := guardErrorCode(err)
-			LogWarn(EventChunkFailed, mergeLogFields(mergeLogFields(baseFields, guardErrorLogFields(err)), map[string]any{
+		var (
+			result   *NormalizedResult
+			err      error
+			cacheHit bool
+			cacheKey string
+		)
+		if g.chunkCache != nil {
+			cacheKey = BuildChunkCacheKey(chunk, endpoints, cfg.Scanners)
+			if cached, ok, cacheErr := g.chunkCache.GetChunkResult(evalCtx, cacheKey); cacheErr == nil && ok && cached != nil {
+				result = cached
+				cacheHit = true
+			}
+		}
+		if !cacheHit {
+			LogInfo(EventChunkStarted, mergeLogFields(baseFields, map[string]any{
 				"chunk_index": index + 1, "chunk_total": len(chunks),
 				"chunk_chars": len([]rune(chunk)), "input_chars": snapshot.PromptLength, "input_limit": inputLimit,
-				"latency_ms": g.clock.Now().Sub(chunkStarted).Milliseconds(), "error_code": code, "status": "failed",
+				"status": "started",
 			}))
-			kind := DecisionUnavailable
-			if code == ErrorCodeInvalidResponse {
-				kind = DecisionInvalid
-			}
-			if g.metrics != nil {
-				g.metrics.Observe(kind, g.clock.Now().Sub(start))
-				var guardErr *GuardError
-				if errors.As(err, &guardErr) && guardErr.Timeout {
-					g.metrics.IncTimeout()
+			result, err = scanChunkWithContextFallback(evalCtx, chunk, func(scanCtx context.Context, subChunk string) (*NormalizedResult, error) {
+				return g.scanChunk(scanCtx, cfg, endpoints, subChunk)
+			})
+			if err != nil {
+				code := guardErrorCode(err)
+				LogWarn(EventChunkFailed, mergeLogFields(mergeLogFields(baseFields, guardErrorLogFields(err)), map[string]any{
+					"chunk_index": index + 1, "chunk_total": len(chunks),
+					"chunk_chars": len([]rune(chunk)), "input_chars": snapshot.PromptLength, "input_limit": inputLimit,
+					"latency_ms": g.clock.Now().Sub(chunkStarted).Milliseconds(), "error_code": code, "status": "failed",
+				}))
+				kind := DecisionUnavailable
+				if code == ErrorCodeInvalidResponse {
+					kind = DecisionInvalid
 				}
+				if g.metrics != nil {
+					g.metrics.Observe(kind, g.clock.Now().Sub(start))
+					var guardErr *GuardError
+					if errors.As(err, &guardErr) && guardErr.Timeout {
+						g.metrics.IncTimeout()
+					}
+				}
+				logGuardFailureWithError(snapshot, cfg, kind, code, err, g.clock.Now().Sub(start))
+				return nil, err
 			}
-			logGuardFailureWithError(snapshot, cfg, kind, code, err, g.clock.Now().Sub(start))
-			return nil, err
+			if g.chunkCache != nil && cacheKey != "" {
+				_ = g.chunkCache.SetChunkResult(evalCtx, cacheKey, result, DefaultChunkCacheTTL)
+			}
 		}
 		result.ChunkTotal = len(chunks)
 		results = append(results, result)
@@ -117,7 +143,7 @@ func (g *GuardEvaluator) Evaluate(ctx context.Context, cfg ActiveConfig, snapsho
 			"chunk_index": index + 1, "chunk_total": len(chunks),
 			"chunk_chars": len([]rune(chunk)), "input_chars": snapshot.PromptLength, "input_limit": inputLimit,
 			"guard_endpoint_id": result.GuardEndpointID, "action": result.Action,
-			"latency_ms": g.clock.Now().Sub(chunkStarted).Milliseconds(), "status": "completed",
+			"latency_ms": g.clock.Now().Sub(chunkStarted).Milliseconds(), "cache_hit": cacheHit, "status": "completed",
 		}))
 		if result.Action == ActionBlock {
 			break

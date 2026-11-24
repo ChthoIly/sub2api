@@ -181,6 +181,7 @@ func (r *Runner) processJob(ctx context.Context, workerID int, cfg ActiveConfig,
 		return r.finishFailure(ctx, job, &GuardError{Code: "no_enabled_endpoint", Retryable: true})
 	}
 	chunks := SplitRunes(scanText, minimumInputLimit(endpoints))
+	chunkCache, _ := r.payload.(ChunkResultCache)
 	results := make([]*NormalizedResult, 0, len(chunks))
 	started := r.clock.Now()
 	for index, chunk := range chunks {
@@ -188,22 +189,40 @@ func (r *Runner) processJob(ctx context.Context, workerID int, cfg ActiveConfig,
 			return err
 		}
 		chunkStarted := r.clock.Now()
-		LogInfo(EventChunkStarted, mergeLogFields(baseFields, map[string]any{"worker_id": workerID, "chunk_index": index + 1, "chunk_total": len(chunks), "chunk_chars": len([]rune(chunk)), "input_chars": job.Snapshot.PromptLength, "input_limit": minimumInputLimit(endpoints), "status": "started"}))
-		result, scanErr := scanChunkWithContextFallback(ctx, chunk, func(scanCtx context.Context, subChunk string) (*NormalizedResult, error) {
-			return scanWithFailover(scanCtx, r.scanner, cfg.Scanners, endpoints, subChunk, r.metrics)
-		})
-		if scanErr != nil {
-			LogWarn(EventChunkFailed, mergeLogFields(mergeLogFields(baseFields, guardErrorLogFields(scanErr)), map[string]any{
-				"worker_id": workerID, "chunk_index": index + 1, "chunk_total": len(chunks),
-				"chunk_chars": len([]rune(chunk)), "input_chars": job.Snapshot.PromptLength,
-				"input_limit": minimumInputLimit(endpoints), "latency_ms": r.clock.Now().Sub(chunkStarted).Milliseconds(),
-				"status": "failed",
-			}))
-			r.observeAsyncFailure(scanErr, r.clock.Now().Sub(started))
-			return r.finishFailure(ctx, job, scanErr)
+		var (
+			result   *NormalizedResult
+			scanErr  error
+			cacheHit bool
+			cacheKey string
+		)
+		if chunkCache != nil {
+			cacheKey = BuildChunkCacheKey(chunk, endpoints, cfg.Scanners)
+			if cached, ok, err := chunkCache.GetChunkResult(ctx, cacheKey); err == nil && ok && cached != nil {
+				result = cached
+				cacheHit = true
+			}
+		}
+		if !cacheHit {
+			LogInfo(EventChunkStarted, mergeLogFields(baseFields, map[string]any{"worker_id": workerID, "chunk_index": index + 1, "chunk_total": len(chunks), "chunk_chars": len([]rune(chunk)), "input_chars": job.Snapshot.PromptLength, "input_limit": minimumInputLimit(endpoints), "status": "started"}))
+			result, scanErr = scanChunkWithContextFallback(ctx, chunk, func(scanCtx context.Context, subChunk string) (*NormalizedResult, error) {
+				return scanWithFailover(scanCtx, r.scanner, cfg.Scanners, endpoints, subChunk, r.metrics)
+			})
+			if scanErr != nil {
+				LogWarn(EventChunkFailed, mergeLogFields(mergeLogFields(baseFields, guardErrorLogFields(scanErr)), map[string]any{
+					"worker_id": workerID, "chunk_index": index + 1, "chunk_total": len(chunks),
+					"chunk_chars": len([]rune(chunk)), "input_chars": job.Snapshot.PromptLength,
+					"input_limit": minimumInputLimit(endpoints), "latency_ms": r.clock.Now().Sub(chunkStarted).Milliseconds(),
+					"status": "failed",
+				}))
+				r.observeAsyncFailure(scanErr, r.clock.Now().Sub(started))
+				return r.finishFailure(ctx, job, scanErr)
+			}
+			if chunkCache != nil && cacheKey != "" {
+				_ = chunkCache.SetChunkResult(ctx, cacheKey, result, DefaultChunkCacheTTL)
+			}
 		}
 		results = append(results, result)
-		LogInfo(EventChunkCompleted, mergeLogFields(baseFields, map[string]any{"worker_id": workerID, "chunk_index": index + 1, "chunk_total": len(chunks), "guard_endpoint_id": result.GuardEndpointID, "action": result.Action, "latency_ms": r.clock.Now().Sub(chunkStarted).Milliseconds(), "status": "completed"}))
+		LogInfo(EventChunkCompleted, mergeLogFields(baseFields, map[string]any{"worker_id": workerID, "chunk_index": index + 1, "chunk_total": len(chunks), "guard_endpoint_id": result.GuardEndpointID, "action": result.Action, "latency_ms": r.clock.Now().Sub(chunkStarted).Milliseconds(), "cache_hit": cacheHit, "status": "completed"}))
 		if result.Action == ActionBlock {
 			break
 		}

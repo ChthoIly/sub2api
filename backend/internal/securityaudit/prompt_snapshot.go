@@ -621,7 +621,8 @@ func blockingSegmentsLatestUserAndPreviousOutput(values []promptSegment) []strin
 func normalizedPromptSegments(values []promptSegment) []promptSegment {
 	normalized := make([]promptSegment, 0, len(values))
 	for _, value := range values {
-		value.text = strings.TrimSpace(claudeCodeInstructionPreamblePattern.ReplaceAllString(value.text, ""))
+		text := claudeCodeInstructionPreamblePattern.ReplaceAllString(value.text, "")
+		value.text = sanitizeBinaryAndEncodedPayloads(text)
 		if value.text != "" {
 			normalized = append(normalized, value)
 		}

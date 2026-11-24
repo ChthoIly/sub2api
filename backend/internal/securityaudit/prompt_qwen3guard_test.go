@@ -18,7 +18,9 @@ func TestParseQwen3GuardStrictAndPolicy(t *testing.T) {
 	}{
 		{"safe", "Safety: Safe\nCategories: None", AllScannerIDs, EventPass, ActionAllow, false},
 		{"controversial", "Safety: Controversial\nCategories: Violent", AllScannerIDs, EventFlag, ActionWarn, false},
-		{"controversial pii escalates", "Safety: Controversial\nCategories: PII", AllScannerIDs, EventCritical, ActionBlock, false},
+		{"controversial pii warns instead of blocking", "Safety: Controversial\nCategories: PII", AllScannerIDs, EventFlag, ActionWarn, false},
+		{"controversial self-harm still escalates", "Safety: Controversial\nCategories: Suicide & Self-Harm", AllScannerIDs, EventCritical, ActionBlock, false},
+		{"unsafe pii still blocks", "Safety: Unsafe\nCategories: PII", AllScannerIDs, EventCritical, ActionBlock, false},
 		{"unsafe", "Safety: Unsafe\nCategories: Jailbreak", AllScannerIDs, EventCritical, ActionBlock, false},
 		{"unknown unsafe", "Safety: Unsafe\nCategories: Future Risk", AllScannerIDs, EventCritical, ActionBlock, false},
 		{"disabled unsafe warns", "Safety: Unsafe\nCategories: Violent", []string{"PII"}, EventFlag, ActionWarn, false},

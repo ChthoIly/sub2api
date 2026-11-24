@@ -39,6 +39,7 @@ func NewPromptService(
 ) *PromptService {
 	enqueuer := NewEnqueuer(config, repo, payload, metrics)
 	evaluator := NewGuardEvaluator(scanner, repo, metrics)
+	evaluator.SetChunkCache(payload)
 	runner := NewRunner(config, repo, payload, scanner, metrics)
 	enqueuer.notify = runner.Notify
 	return &PromptService{

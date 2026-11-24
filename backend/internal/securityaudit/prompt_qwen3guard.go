@@ -203,7 +203,10 @@ func unknownCategoryID(value string) string {
 }
 
 func isElevatedControversial(category string) bool {
-	return category == "jailbreak" || category == "pii" || category == "suicide_and_self_harm"
+	// Controversial(0.5) PII stays at flag/Warn rather than hard-escalating to
+	// critical/Block; only high-confidence Unsafe(1.0) PII triggers critical.
+	// Jailbreak remains gated by ConfirmJailbreakSignals in RefineJailbreakResult.
+	return category == "jailbreak" || category == "suicide_and_self_harm"
 }
 
 type OpenAICompatibleScanner struct {

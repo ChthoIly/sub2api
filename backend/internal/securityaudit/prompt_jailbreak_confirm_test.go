@@ -81,12 +81,23 @@ func TestRefineJailbreakResultBehavior(t *testing.T) {
 	})
 
 	t.Run("unconfirmed controversial jailbreak with elevated secondary category keeps critical", func(t *testing.T) {
-		parsed, err := ParseQwen3Guard("Safety: Controversial\nCategories: PII, Jailbreak", AllScannerIDs)
+		parsed, err := ParseQwen3Guard("Safety: Controversial\nCategories: Suicide & Self-Harm, Jailbreak", AllScannerIDs)
 		require.NoError(t, err)
 		refined := RefineJailbreakResult("普通文本不包含破甲指令", parsed)
 		require.Equal(t, EventCritical, refined.Decision)
 		require.Equal(t, RiskCritical, refined.RiskLevel)
 		require.Equal(t, ActionBlock, refined.Action)
+		require.Equal(t, []string{"suicide_and_self_harm"}, refined.Categories)
+		require.Equal(t, []string{"suicide_and_self_harm"}, refined.MatchedScanners)
+	})
+
+	t.Run("unconfirmed controversial jailbreak with pii downgrades to warn", func(t *testing.T) {
+		parsed, err := ParseQwen3Guard("Safety: Controversial\nCategories: PII, Jailbreak", AllScannerIDs)
+		require.NoError(t, err)
+		refined := RefineJailbreakResult("Tony Webster / Flickr / CC BY 2.0", parsed)
+		require.Equal(t, EventFlag, refined.Decision)
+		require.Equal(t, RiskMedium, refined.RiskLevel)
+		require.Equal(t, ActionWarn, refined.Action)
 		require.Equal(t, []string{"pii"}, refined.Categories)
 		require.Equal(t, []string{"pii"}, refined.MatchedScanners)
 	})
