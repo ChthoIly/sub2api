@@ -9,7 +9,7 @@ import (
 const (
 	claudeCodeSecurityMonitorPromptPrefix = "You are a security monitor for autonomous AI coding agents."
 	claudeCodeSecurityMonitorPromptMinLen = 10_000
-	claudeCodeSecurityMonitorPromptMaxLen = 40_000
+	claudeCodeSecurityMonitorPromptMaxLen = 160_000
 )
 
 var claudeCodeSecurityMonitorMarkers = []string{
@@ -17,11 +17,12 @@ var claudeCodeSecurityMonitorMarkers = []string{
 	"- `<transcript>`:",
 	"## HARD BLOCK",
 	"## SOFT BLOCK",
-	"## Classification Process",
 	"## Output Format",
-	"<block>yes</block>",
-	"<block>no</block>",
 }
+
+var claudeCodeSecurityMonitorAssistantVerdictPattern = regexp.MustCompile(
+	`^(?:<block>(?:yes|no)</block>|<severity>[0-9]{1,2}</severity>)$`,
+)
 
 var claudeCodeSecurityMonitorUserPrefixes = []string{
 	"Err on the side of blocking.",
@@ -195,23 +196,45 @@ var (
 )
 
 // isClaudeCodeSecurityMonitorUserFrame reports whether an Anthropic Messages
-// payload carries the single-turn user framing used by Claude Code's internal
-// auto-mode security monitor classifier. Requiring a single user message
-// prevents multi-turn or prefilled-assistant chat requests from ever claiming
-// security-monitor status.
+// payload carries the user framing used by Claude Code's internal auto-mode
+// security monitor classifier. It accepts either a single-turn user frame or a
+// multi-turn classifier conversation where every user turn is a monitor frame
+// and every assistant turn is a bare classifier verdict (<block> / <severity>),
+// preventing ordinary multi-turn chat requests from claiming monitor status.
 func isClaudeCodeSecurityMonitorUserFrame(root map[string]any) bool {
 	if root == nil {
 		return false
 	}
 	messages, ok := root["messages"].([]any)
-	if !ok || len(messages) != 1 {
+	if !ok || len(messages) == 0 {
 		return false
 	}
-	msg, ok := messages[0].(map[string]any)
-	if !ok || !strings.EqualFold(stringValue(msg["role"]), "user") {
-		return false
+	hasMonitorUser := false
+	for _, rawMsg := range messages {
+		msg, ok := rawMsg.(map[string]any)
+		if !ok {
+			return false
+		}
+		role := strings.ToLower(stringValue(msg["role"]))
+		switch role {
+		case "user":
+			if !isSecurityMonitorUserMessage(msg["content"]) {
+				return false
+			}
+			hasMonitorUser = true
+		case "assistant":
+			if !isSecurityMonitorAssistantVerdict(msg["content"]) {
+				return false
+			}
+		default:
+			return false
+		}
 	}
-	for _, text := range contentTexts(msg["content"]) {
+	return hasMonitorUser
+}
+
+func isSecurityMonitorUserMessage(content any) bool {
+	for _, text := range contentTexts(content) {
 		trimmed := strings.TrimSpace(text)
 		for _, prefix := range claudeCodeSecurityMonitorUserPrefixes {
 			if strings.HasPrefix(trimmed, prefix) {
@@ -223,6 +246,14 @@ func isClaudeCodeSecurityMonitorUserFrame(root map[string]any) bool {
 		}
 	}
 	return false
+}
+
+func isSecurityMonitorAssistantVerdict(content any) bool {
+	texts := contentTexts(content)
+	if len(texts) != 1 {
+		return false
+	}
+	return claudeCodeSecurityMonitorAssistantVerdictPattern.MatchString(strings.TrimSpace(texts[0]))
 }
 
 // isOfficialSecurityMonitorSystemBlock reports whether a single system text
@@ -240,6 +271,11 @@ func isOfficialSecurityMonitorSystemBlock(text string) bool {
 		if !strings.Contains(trimmed, marker) {
 			return false
 		}
+	}
+	hasBlockOutput := strings.Contains(trimmed, "<block>yes</block>") && strings.Contains(trimmed, "<block>no</block>")
+	hasSeverityOutput := strings.Contains(trimmed, "<severity>")
+	if !hasBlockOutput && !hasSeverityOutput {
+		return false
 	}
 	if containsNonEnglishScript(trimmed) {
 		return false
