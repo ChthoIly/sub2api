@@ -6,12 +6,12 @@ BACKEND_DIR="$(CDPATH= cd -- "$SCRIPT_DIR/.." && pwd)"
 REPO_DIR="$(CDPATH= cd -- "$BACKEND_DIR/.." && pwd)"
 VERSION_FILE="$BACKEND_DIR/cmd/server/VERSION"
 
-# Prefer the exact release tag when building from a tagged checkout so
-# source builds from vX.Y.Z don't inherit the previous VERSION file value.
+# Prefer the latest release tag reachable from HEAD so
+# source builds with custom commits on top of vX.Y.Z still resolve to X.Y.Z.
 if command -v git >/dev/null 2>&1; then
   TAG="$(
-    git -C "$REPO_DIR" describe --tags --exact-match --match 'v[0-9]*' 2>/dev/null || \
-    git -C "$REPO_DIR" describe --tags --exact-match --match '[0-9]*' 2>/dev/null || \
+    git -C "$REPO_DIR" describe --tags --abbrev=0 --match 'v[0-9]*' 2>/dev/null || \
+    git -C "$REPO_DIR" describe --tags --abbrev=0 --match '[0-9]*' 2>/dev/null || \
     true
   )"
   if [ -n "$TAG" ]; then
