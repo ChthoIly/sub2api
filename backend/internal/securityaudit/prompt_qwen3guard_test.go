@@ -111,6 +111,28 @@ func TestAggregateRequiresEveryResult(t *testing.T) {
 	require.Equal(t, []string{"pii", "jailbreak"}, result.Categories)
 }
 
+func TestParseQwen3GuardControversialRespectsEnabledScanners(t *testing.T) {
+	disabledResult, err := ParseQwen3Guard(
+		"Safety: Controversial\nCategories: Politically Sensitive Topics, PII",
+		[]string{"violent", "jailbreak"},
+	)
+	require.NoError(t, err)
+	require.Equal(t, EventPass, disabledResult.Decision)
+	require.Equal(t, RiskLow, disabledResult.RiskLevel)
+	require.Equal(t, ActionAllow, disabledResult.Action)
+	require.Empty(t, disabledResult.MatchedScanners)
+
+	enabledResult, err := ParseQwen3Guard(
+		"Safety: Controversial\nCategories: Politically Sensitive Topics",
+		[]string{"politically_sensitive_topics"},
+	)
+	require.NoError(t, err)
+	require.Equal(t, EventFlag, enabledResult.Decision)
+	require.Equal(t, RiskMedium, enabledResult.RiskLevel)
+	require.Equal(t, ActionWarn, enabledResult.Action)
+	require.Equal(t, []string{"politically_sensitive_topics"}, enabledResult.MatchedScanners)
+}
+
 func TestAggregateDeduplicatesFactsAndUsesMostSevereEndpointMetadata(t *testing.T) {
 	result, err := AggregateResults([]*NormalizedResult{
 		{Decision: EventPass, RiskLevel: RiskLow, Action: ActionAllow, Safety: "Safe", Categories: []string{"pii"}, MatchedScanners: []string{"pii"}, ScannerScores: map[string]float64{"pii": 0}, ScannerEvidence: map[string]string{"pii": "first"}, GuardEndpointID: "safe-node", ScannerVersion: "safe-version", PolicyID: "priority", PolicyVersion: 1},

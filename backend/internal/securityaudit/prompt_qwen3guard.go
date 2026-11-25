@@ -176,8 +176,10 @@ func ParseQwen3Guard(content string, enabledScanners []string) (*NormalizedResul
 	}
 	score := 0.0
 	if safety == "Controversial" {
-		score = 0.5
-		result.Decision, result.RiskLevel, result.Action = EventFlag, RiskMedium, ActionWarn
+		if len(matched) > 0 || len(unknownList) > 0 || len(knownList) == 0 {
+			score = 0.5
+			result.Decision, result.RiskLevel, result.Action = EventFlag, RiskMedium, ActionWarn
+		}
 	}
 	if safety == "Unsafe" {
 		score = 1
